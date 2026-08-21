@@ -128,7 +128,9 @@ def test_resume_carries_prior_results_and_resets_errors(monkeypatch):
 
     assert captured["flight"] is prior["flight"], "success is carried forward"
     assert "weather" not in captured, "a failed agent is left unset so it re-runs"
-    assert captured["errors"] == [], "stale errors are cleared"
+    # None, not []: the channel is append-reduced, so `[]` appends nothing and
+    # would leave the checkpointed value in place. See models.accumulate.
+    assert captured["errors"] is None, "stale errors are cleared"
 
 
 def test_fresh_mode_ignores_saved_state(monkeypatch):
@@ -150,4 +152,4 @@ def test_fresh_mode_ignores_saved_state(monkeypatch):
 
     orchestrator.plan_trip(_req(), remember=False)
     assert used["config"] is None
-    assert set(used["seed"]) == {"request", "errors"}
+    assert set(used["seed"]) == {"request", "errors", "warnings", "evidence"}

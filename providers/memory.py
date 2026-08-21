@@ -48,17 +48,42 @@ def thread_id(req: TripRequest) -> str:
     return hashlib.sha256(parts.encode()).hexdigest()[:16]
 
 
+def _allowed_models() -> list[tuple[str, str]]:
+    """(module, class) pairs the checkpoint deserialiser may reconstruct.
+
+    LangGraph warns on unregistered types today and will block them in a future
+    version, so the state schema's models are declared. Enumerated from the
+    module rather than hand-listed, so adding a model cannot silently break
+    resume — the failure mode being a checkpoint that loads as plain dicts,
+    which then fails on the first attribute access.
+
+    An explicit allowlist rather than `True`: a checkpoint file is untrusted
+    input the moment it moves between machines.
+    """
+    import models as models_module
+    from pydantic import BaseModel
+
+    return [
+        ("models", name)
+        for name, obj in vars(models_module).items()
+        if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel
+    ]
+
+
 def get_checkpointer() -> "object":
     """SqliteSaver over a file on disk.
 
     check_same_thread=False because the fan-out runs nodes in worker threads,
     and every one of them writes checkpoints.
     """
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    return SqliteSaver(conn)
+
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_allowed_models())
+    return SqliteSaver(conn, serde=serde)
 
 
 def forget(req: TripRequest) -> int:

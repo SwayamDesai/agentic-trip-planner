@@ -5,8 +5,7 @@ No two agents touch the same key, so when we move to parallel execution in
 phase 2 LangGraph can merge the partial updates without custom reducers.
 """
 
-import operator
-from typing import Annotated, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -302,6 +301,24 @@ class BudgetResult(BaseModel):
     advice: Optional[BudgetAdvice] = None
 
 
+def accumulate(current: Optional[list], update: Any) -> list:
+    """Append across concurrent writers, but allow an explicit reset.
+
+    `operator.add` cannot clear a channel: seeding `[]` appends nothing, so the
+    checkpointed value survives. That produced a real bug — after three resumes
+    of the same trip, a single warning was reported three times, and a stale
+    error from the first run was still shown after the agent had succeeded.
+
+    Passing None resets. Anything else appends, so concurrent agents still
+    accumulate as they must.
+    """
+    if update is None:
+        return []
+    if current is None:
+        return list(update)
+    return list(current) + list(update)
+
+
 # --- graph state ---
 
 
@@ -321,17 +338,17 @@ class TripState(TypedDict, total=False):
     itinerary: Optional[ItineraryResult]
     budget: Optional[BudgetResult]
     hotels: Optional[HotelResult]
-    errors: Annotated[list[str], operator.add]
+    errors: Annotated[list[str], accumulate]
     # deterministic checks that found something suspect but not fatal; same
     # append reducer, since several agents can report concurrently
-    warnings: Annotated[list[str], operator.add]
+    warnings: Annotated[list[str], accumulate]
     # What the tools actually returned this run, projected down to the fields
     # needed to check the answer against its sources. Append-reduced like
     # `errors`, since several agents write it concurrently.
     #
     # A projection rather than the raw payloads: these are checkpointed, and
     # storing full POI lists would bloat the store for no benefit.
-    evidence: Annotated[list[dict], operator.add]
+    evidence: Annotated[list[dict], accumulate]
     plan: Optional[str]
     status: Optional[str]  # "ok" | "degraded" | "failed"
     # attached after the graph completes, not written by any node

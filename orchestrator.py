@@ -233,7 +233,10 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
         budget_usd=request.budget_usd,
     ):
         if not remember:
-            state = build_graph().invoke({"request": request, "errors": []})
+            state = build_graph().invoke(
+                {"request": request, "errors": None, "warnings": None,
+                 "evidence": None}
+            )
         else:
             checkpointer = get_checkpointer()
             graph = build_graph(checkpointer)
@@ -242,10 +245,22 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
             saved = graph.get_state(config)
             prior = saved.values if saved and saved.values else {}
 
-            # Carry forward whatever earlier runs managed to produce. `errors` is
-            # deliberately reset: a stale message about an agent that has since
-            # succeeded would be reported as a current failure.
-            seed: TripState = {"request": request, "errors": []}
+            # Carry forward what earlier runs produced, and CLEAR the per-run
+            # channels. All three describe one run, not the trip:
+            #   errors    a failure the last run had may have since succeeded
+            #   warnings  otherwise the same finding is reported once per resume
+            #   evidence  stale place data could validate an itinerary the
+            #             current run's places node never returned — the exact
+            #             imprecision that moving off the cache was meant to fix
+            #
+            # None is the reset signal; `[]` would append nothing and leave the
+            # checkpointed value in place.
+            seed: TripState = {
+                "request": request,
+                "errors": None,
+                "warnings": None,
+                "evidence": None,
+            }
             for key in ("flight", "weather", "hotels", "places", "itinerary"):
                 if prior.get(key) is not None:
                     seed[key] = prior[key]
