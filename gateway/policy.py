@@ -28,6 +28,13 @@ class RoutePolicy:
 # Measured: a fresh plan is ~13 LLM calls / ~40k tokens; a chat turn is ~1k.
 # 40:1 reflects that. A resumed plan does almost no work, hence refundable.
 ROUTES: dict[tuple[str, str], RoutePolicy] = {
+    # Enqueueing is where the cost is charged, because that is where the work is
+    # committed. Polling and streaming are cheap and must stay cheap: metering a
+    # poll would punish a client for waiting.
+    ("POST", "/plans"): RoutePolicy(
+        cost=40, concurrency=True, refundable=True,
+        description="enqueue a full multi-agent plan",
+    ),
     ("GET", "/api/plan"): RoutePolicy(
         cost=40, concurrency=True, refundable=True,
         description="full multi-agent plan",
@@ -40,7 +47,12 @@ ROUTES: dict[tuple[str, str], RoutePolicy] = {
 # Anything not listed is free: health checks, the SPA, static assets. Metering
 # static files would be noise, and a gateway that rate-limits its own dashboard
 # is a gateway nobody can debug.
-FREE_PREFIXES = ("/health", "/gateway", "/docs", "/openapi.json")
+FREE_PREFIXES = (
+    "/health", "/gateway", "/docs", "/openapi.json",
+    # polling and progress are free: a caller already paid to enqueue, and
+    # charging them to find out whether it finished would be perverse
+    "/plans/", "/jobs/",
+)
 
 
 def policy_for(method: str, path: str) -> Optional[RoutePolicy]:

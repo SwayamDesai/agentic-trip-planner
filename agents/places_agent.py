@@ -23,7 +23,7 @@ start its research last.
 
 import time
 
-from agents.base import _trace, deadline_for
+from agents.base import _trace, bind, deadline_for
 from models import PlaceCandidate, PlaceSearchPlan, PlacesResult, TripState
 from providers import metrics
 from providers.llm import invoke_structured
@@ -130,6 +130,7 @@ def _choose_categories(destination: str, preferences: list[str], guide: str):
 
 def places_agent(state: TripState) -> TripState:
     """Gather real candidate places for the destination."""
+    bind(state)
     if state.get("places") is not None:
         _trace("places", "skip (cached from earlier run)", time.perf_counter())
         metrics.record_outcome("places", "skipped", 0.0)

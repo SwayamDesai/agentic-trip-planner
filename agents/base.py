@@ -77,6 +77,16 @@ def describe_request(req: TripRequest) -> str:
     return "\n".join(lines)
 
 
+def bind(state: TripState) -> None:
+    """Attach the calling thread to this run's metrics and trace.
+
+    First line of every node. A fan-out agent runs in a thread LangGraph
+    created, which inherits no context, so without this its recordings land
+    nowhere and its spans start a separate trace.
+    """
+    metrics.bind_run(state)
+
+
 def already_done(name: str, state: TripState) -> bool:
     """True if this agent already has a result from an earlier run.
 
@@ -112,6 +122,7 @@ def run_agent(
     single call and so have no tool payloads to compare against; it reads what
     it needs from state instead.
     """
+    bind(state)
     if already_done(name, state):
         return {}
 
@@ -373,6 +384,7 @@ def run_tool_agent(
     reason lands in `errors`, so a dead tool or model still yields a partial
     plan rather than killing the graph.
     """
+    bind(state)
     if already_done(name, state):
         return {}
 

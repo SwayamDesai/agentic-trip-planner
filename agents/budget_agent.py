@@ -11,7 +11,7 @@ The model never sees a blank total to fill in, so it cannot invent one. This
 mirrors `synthesize`: anything derivable is derived, not generated.
 """
 
-from agents.base import _trace, deadline_for, describe_request, timeout_for
+from agents.base import _trace, bind, deadline_for, describe_request, timeout_for
 from costs import activity_allowance, compute_breakdown
 from tools.schemas import summarize_exception
 from verify import verify_breakdown_arithmetic, verify_budget_cap
@@ -141,6 +141,7 @@ def budget_agent(state: TripState) -> TripState:
     re-pay for advice on every resume. So it recomputes the breakdown — cheap,
     pure arithmetic — and only calls the model when the numbers actually moved.
     """
+    bind(state)
     t0 = time.perf_counter()
     breakdown = compute_breakdown(state)
 

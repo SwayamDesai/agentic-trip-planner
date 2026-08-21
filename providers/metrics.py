@@ -8,17 +8,28 @@ Collected via a LangChain callback rather than by inspecting return values,
 because `invoke_structured` returns a parsed Pydantic object and discards the
 usage data attached to the raw response.
 
-Threading: the fan-out runs agents in worker threads, so the collector is
-guarded by a lock and keyed by agent name. One collector per process, reset at
-the start of each run — concurrent runs in one process would interleave, which
-is acceptable while plans are serialised (they must be anyway, for quota).
+Scoping: one collector PER RUN, not per process. A single global works only
+while exactly one plan runs at a time; two concurrent plans would have the
+second `reset()` discard the first plan's counters mid-flight. Measured before
+this change: ten LLM calls across two plans, seven recorded.
+
+The run id travels two ways, and it needs both:
+
+  * in `TripState`, because LangGraph's fan-out runs each agent in a worker
+    thread and a contextvar set in the parent does NOT cross that boundary
+  * in a contextvar, bound at the top of each node from the state, so
+    everything the node calls downstream — including the LLM callback several
+    frames deep — can find its collector without threading an argument through
+    every signature
 """
 
+import contextvars
 import threading
 import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -75,46 +86,101 @@ class RunMetrics:
 
 
 _LOCK = threading.Lock()
-_CURRENT: RunMetrics = RunMetrics()
+
+# run_id -> collector. Replaces the single module-level collector.
+_RUNS: dict[str, RunMetrics] = {}
+
+# The run this thread is currently working on. Set by `bind_run` at node entry.
+_CURRENT_RUN: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "trip_run_id", default=None
+)
 
 
-def reset() -> RunMetrics:
-    """Begin a new run. Returns the fresh collector."""
-    global _CURRENT
+def new_run() -> str:
+    """Start a run and return its id. The id goes into TripState."""
+    run_id = uuid.uuid4().hex[:16]
     with _LOCK:
-        _CURRENT = RunMetrics()
-        return _CURRENT
+        _RUNS[run_id] = RunMetrics()
+    _CURRENT_RUN.set(run_id)
+    return run_id
+
+
+def bind_run(state) -> None:
+    """Attach this thread to the run described by `state`.
+
+    Called at the top of every node. Without it a fan-out agent's thread has no
+    idea which run it belongs to, because contextvars do not cross the thread
+    boundary LangGraph creates.
+    """
+    run_id = (state or {}).get("run_id") if isinstance(state, dict) else None
+    if run_id:
+        _CURRENT_RUN.set(run_id)
+
+
+def _collector() -> Optional[RunMetrics]:
+    run_id = _CURRENT_RUN.get()
+    if run_id is None:
+        return None
+    with _LOCK:
+        return _RUNS.get(run_id)
+
+
+def get(run_id: str) -> Optional[RunMetrics]:
+    with _LOCK:
+        return _RUNS.get(run_id)
 
 
 def record_llm(agent: str, prompt_tokens: int, completion_tokens: int) -> None:
+    run = _collector()
+    if run is None:
+        return          # untracked context (a test, a script): drop silently
     with _LOCK:
-        m = _CURRENT.agents[agent]
+        m = run.agents[agent]
         m.llm_calls += 1
         m.prompt_tokens += prompt_tokens
         m.completion_tokens += completion_tokens
 
 
 def record_tool(agent: str) -> None:
-    with _LOCK:
-        _CURRENT.agents[agent].tool_calls += 1
+    run = _collector()
+    if run is not None:
+        with _LOCK:
+            run.agents[agent].tool_calls += 1
 
 
 def record_retry(agent: str) -> None:
-    with _LOCK:
-        _CURRENT.agents[agent].retries += 1
+    run = _collector()
+    if run is not None:
+        with _LOCK:
+            run.agents[agent].retries += 1
 
 
 def record_outcome(agent: str, outcome: str, seconds: float) -> None:
+    run = _collector()
+    if run is None:
+        return
     with _LOCK:
-        m = _CURRENT.agents[agent]
+        m = run.agents[agent]
         m.outcome = outcome
         m.seconds = seconds
 
 
-def finish() -> RunMetrics:
+def finish(run_id: str) -> Optional[RunMetrics]:
+    """Close a run and drop it from the registry.
+
+    Removal matters: a long-lived worker process would otherwise accumulate one
+    collector per plan it has ever run.
+    """
     with _LOCK:
-        _CURRENT.wall_seconds = time.perf_counter() - _CURRENT.started_at
-        return _CURRENT
+        run = _RUNS.pop(run_id, None)
+    if run is not None:
+        run.wall_seconds = time.perf_counter() - run.started_at
+    return run
+
+
+def active_runs() -> int:
+    with _LOCK:
+        return len(_RUNS)
 
 
 class TokenCounter(BaseCallbackHandler):

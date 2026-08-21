@@ -152,4 +152,7 @@ def test_fresh_mode_ignores_saved_state(monkeypatch):
 
     orchestrator.plan_trip(_req(), remember=False)
     assert used["config"] is None
-    assert set(used["seed"]) == {"request", "errors", "warnings", "evidence"}
+    # run_id identifies this run's metrics collector and trace
+    assert set(used["seed"]) == {
+        "run_id", "request", "errors", "warnings", "evidence",
+    }

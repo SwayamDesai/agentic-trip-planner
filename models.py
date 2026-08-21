@@ -331,6 +331,10 @@ class TripState(TypedDict, total=False):
     of accumulate.
     """
 
+    # Identifies this run's metrics collector and trace. Travels in state
+    # because LangGraph's fan-out runs agents in worker threads, and a
+    # contextvar set in the parent does not cross that boundary.
+    run_id: str
     request: TripRequest
     flight: Optional[FlightResult]
     weather: Optional[WeatherResult]

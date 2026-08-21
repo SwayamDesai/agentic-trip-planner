@@ -24,16 +24,17 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import agents.base as agent_base
+import jobs
 from chat import extract, is_ready, missing_fields
 from models import TripRequest
 from orchestrator import plan_trip
-from scope import resolve_request
+from scope import InvalidTripError, resolve_request
 from status import OPTIONAL, REQUIRED
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -204,6 +205,124 @@ async def plan(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- jobs -----------------------------------------------------------------
+#
+# The async model. `/api/plan` (below, kept for comparison) runs a plan INSIDE
+# the request: 60-150s of work on one connection, destroyed by any deploy. These
+# three endpoints separate accepting the work from doing it.
+
+
+class PlanRequest(BaseModel):
+    origin: str
+    destination: str
+    start: str
+    end: Optional[str] = None
+    nights: Optional[int] = None
+    travelers: Optional[int] = None
+    budget: Optional[int] = None
+    prefer: list[str] = []
+    fresh: bool = False
+
+
+@app.post("/plans", status_code=202)
+def create_plan(body: PlanRequest) -> dict:
+    """Accept a plan and return immediately.
+
+    202 Accepted, not 200 OK: the work has been accepted but not performed, and
+    the status code should say so. Returns in milliseconds.
+
+    Validation happens HERE rather than in the worker — a bad request should be
+    rejected while the caller is still listening, not turned into a job that
+    fails three times and dies in a dead-letter queue nobody reads.
+    """
+    try:
+        request, scope_reason = resolve_request(
+            origin=body.origin,
+            destination=body.destination,
+            start_date=body.start,
+            end_date=body.end,
+            nights=body.nights,
+            travelers=body.travelers,
+            budget_usd=body.budget,
+            preferences=body.prefer,
+        )
+    except InvalidTripError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    job_id = jobs.enqueue(
+        {"request": request.model_dump(), "remember": not body.fresh}
+    )
+    return {
+        "job_id": job_id,
+        "status": jobs.QUEUED,
+        "request": request.model_dump(),
+        "scope_reason": scope_reason,
+        "poll": f"/plans/{job_id}",
+        "events": f"/plans/{job_id}/events",
+    }
+
+
+@app.get("/plans/{job_id}")
+def get_plan(job_id: str) -> dict:
+    """Status, and the result once it exists."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="no such job")
+    return job.as_dict()
+
+
+@app.get("/plans/{job_id}/events")
+async def plan_events(job_id: str, after: int = 0):
+    """Stream progress for a job.
+
+    The events come from the job's event log, not from memory: the worker is a
+    different process now, so the API cannot observe agents directly. That is
+    the first real cost of moving work out of the request, and this endpoint is
+    where it is paid.
+
+    Resumable via `?after=<last event id>`, so a browser that reconnects does
+    not replay the whole run — which the in-request version could not offer at
+    all, because a dropped connection lost the work with it.
+    """
+    if jobs.get(job_id) is None:
+        raise HTTPException(status_code=404, detail="no such job")
+
+    async def stream():
+        cursor = after
+        idle = 0.0
+        while True:
+            for event in jobs.events_since(job_id, cursor):
+                cursor = event["id"]
+                yield _sse(event["kind"], {"id": cursor, **event["data"]})
+                idle = 0.0
+
+            job = jobs.get(job_id)
+            if job and job.terminal:
+                yield _sse(
+                    "result",
+                    {"status": job.status, "result": job.result, "error": job.error},
+                )
+                return
+
+            await asyncio.sleep(0.4)
+            idle += 0.4
+            if idle > 300:
+                yield _sse("timeout", {"detail": "no progress for 5 minutes"})
+                return
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/jobs/stats")
+def job_stats() -> dict:
+    """Queue depth. The number you alert on in production."""
+    return jobs.stats()
 
 
 # --- static ---------------------------------------------------------------

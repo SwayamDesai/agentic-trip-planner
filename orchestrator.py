@@ -221,7 +221,8 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
     can be answered for after the fact: which agent spent what, where it failed,
     and how much of it came from cache.
     """
-    metrics.reset()
+    # one collector and one trace per run, so concurrent plans stay separate
+    run_id = metrics.new_run()
 
     with tracing.trace_run(
         "plan_trip",
@@ -234,8 +235,8 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
     ):
         if not remember:
             state = build_graph().invoke(
-                {"request": request, "errors": None, "warnings": None,
-                 "evidence": None}
+                {"run_id": run_id, "request": request, "errors": None,
+                 "warnings": None, "evidence": None}
             )
         else:
             checkpointer = get_checkpointer()
@@ -256,6 +257,7 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
             # None is the reset signal; `[]` would append nothing and leave the
             # checkpointed value in place.
             seed: TripState = {
+                "run_id": run_id,
                 "request": request,
                 "errors": None,
                 "warnings": None,
@@ -267,8 +269,8 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
 
             state = graph.invoke(seed, config)
 
-    run = metrics.finish()
+    run = metrics.finish(run_id)
     state = dict(state)
-    state["metrics"] = run.as_dict()
+    state["metrics"] = run.as_dict() if run else None
     state["cache"] = cache_stats()
     return state

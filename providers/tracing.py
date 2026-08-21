@@ -32,11 +32,22 @@ _SECRET = os.getenv("LANGFUSE_SECRET_KEY")
 _client: Any = None
 _initialised = False
 
-# One trace per plan run. Module-level rather than a contextvar because
-# contextvars do not propagate into LangGraph's worker threads; the consequence
-# is that concurrent plan runs in a single process would share a trace, which
-# is acceptable while runs are serialised for quota reasons.
-_current_trace_id: Optional[str] = None
+# One trace per run, keyed by run id. A single module-level trace id worked only
+# while one plan ran at a time; with workers, two plans' spans would land in one
+# trace. The run id is read from the same contextvar `metrics` binds at node
+# entry, so this needs no extra plumbing through the agents.
+_trace_ids: dict[str, str] = {}
+
+
+def _run_id() -> Optional[str]:
+    from providers.metrics import _CURRENT_RUN
+
+    return _CURRENT_RUN.get()
+
+
+def _trace_id() -> Optional[str]:
+    run_id = _run_id()
+    return _trace_ids.get(run_id) if run_id else None
 
 
 def enabled() -> bool:
@@ -82,8 +93,9 @@ def callbacks(agent: str) -> list:
         from langfuse.langchain import CallbackHandler
         from langfuse.types import TraceContext
 
-        if _current_trace_id:
-            return [CallbackHandler(trace_context=TraceContext(trace_id=_current_trace_id))]
+        trace_id = _trace_id()
+        if trace_id:
+            return [CallbackHandler(trace_context=TraceContext(trace_id=trace_id))]
         return [CallbackHandler()]
     except Exception:  # noqa: BLE001
         return []
@@ -92,13 +104,15 @@ def callbacks(agent: str) -> list:
 @contextmanager
 def trace_run(name: str, **metadata: Any):
     """Wrap a whole plan run in one trace. No-op when unconfigured."""
-    global _current_trace_id
     c = client()
     if c is None:
         yield None
         return
 
-    _current_trace_id = new_trace_id()
+    run_id = _run_id()
+    trace_id = new_trace_id()
+    if run_id and trace_id:
+        _trace_ids[run_id] = trace_id
     span = None
     try:
         from langfuse.types import TraceContext
@@ -107,9 +121,7 @@ def trace_run(name: str, **metadata: Any):
             name=name,
             as_type="chain",
             input=metadata,
-            trace_context=(
-                TraceContext(trace_id=_current_trace_id) if _current_trace_id else None
-            ),
+            trace_context=(TraceContext(trace_id=trace_id) if trace_id else None),
         )
         yield span
     except Exception:  # noqa: BLE001 - never let tracing break a run
@@ -121,7 +133,9 @@ def trace_run(name: str, **metadata: Any):
             c.flush()
         except Exception:  # noqa: BLE001
             pass
-        _current_trace_id = None
+        if run_id:
+            # dropped, or a long-lived worker accumulates one entry per plan
+            _trace_ids.pop(run_id, None)
 
 
 @contextmanager
@@ -141,7 +155,7 @@ def trace_agent(agent: str, **metadata: Any):
             as_type="agent",
             input=metadata,
             trace_context=(
-                TraceContext(trace_id=_current_trace_id) if _current_trace_id else None
+                TraceContext(trace_id=_trace_id()) if _trace_id() else None
             ),
         )
         yield span
