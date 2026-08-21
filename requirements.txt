@@ -1,0 +1,24 @@
+# core
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+requests>=2.31.0
+airportsdata>=20241001
+
+# graph orchestration
+langgraph>=0.2.0
+langchain-core>=0.3.0
+
+# llm providers (both speak the OpenAI wire format)
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0
+
+# observability
+langfuse>=4.0.0
+
+# dev
+pytest>=8.0.0
+pytest-cov>=5.0.0
+
+# web
+fastapi>=0.115.0
+uvicorn>=0.32.0

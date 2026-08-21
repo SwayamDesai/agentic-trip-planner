@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — AI Trip Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="shell topbar__inner">
+    <a class="brand" href="/">
+      <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 0c3 3 3 17 0 20M2 12h20"
+              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <span>Atlas</span>
+    </a>
+    <nav class="topbar__nav">
+      <a class="topbar__link is-active" href="#">Trips</a>
+      <a class="topbar__link" href="#">Flights</a>
+      <a class="topbar__link" href="#">Stays</a>
+      <a class="topbar__link" href="#">Support</a>
+    </nav>
+    <div class="topbar__actions">
+      <button class="btn btn--ghost" type="button">USD</button>
+      <button class="btn btn--light" type="button">Sign in</button>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="shell">
+    <p class="hero__eyebrow">Multi-agent planning</p>
+    <h1 class="hero__title">Plan an entire trip in one conversation.</h1>
+    <p class="hero__lede">
+      Five specialist agents research live flights, real hotel rates, weather and
+      things to do — then reconcile it against your budget.
+    </p>
+    <ul class="hero__proof">
+      <li><strong>Live</strong> Google Flights fares</li>
+      <li><strong>Real</strong> hotel rates</li>
+      <li><strong>Verified</strong> attractions, no invented places</li>
+    </ul>
+  </div>
+</section>
+
+<main class="shell layout">
+
+  <!-- ── conversation ───────────────────────────────────────────── -->
+  <section class="panel chat" aria-label="Trip assistant">
+    <header class="panel__head">
+      <div class="avatar" aria-hidden="true">A</div>
+      <div class="panel__heading">
+        <h2>Trip assistant</h2>
+        <p class="panel__sub" id="assistant-state">Ready</p>
+      </div>
+    </header>
+
+    <div class="chat__log" id="chat-log" role="log" aria-live="polite"></div>
+
+    <div class="chat__suggestions" id="suggestions">
+      <button class="chip" type="button">Long weekend in Lisbon from Chicago in October</button>
+      <button class="chip" type="button">Two weeks in Japan from New York, $6000</button>
+      <button class="chip" type="button">5 nights in Seville from Boston, food and history</button>
+    </div>
+
+    <form class="chat__composer" id="chat-form" autocomplete="off">
+      <label class="sr-only" for="chat-input">Describe your trip</label>
+      <textarea id="chat-input" rows="1" placeholder="Where would you like to go?"
+                enterkeyhint="send"></textarea>
+      <button class="btn btn--primary chat__send" id="chat-send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h14M13 6l6 6-6 6"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <!-- ── results ────────────────────────────────────────────────── -->
+  <section class="results" aria-label="Trip plan">
+
+    <div class="empty" id="empty-state">
+      <div class="empty__art" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </div>
+      <h2>Your plan will appear here</h2>
+      <p>Tell the assistant where you want to go. It only needs a departure city,
+         a destination and a start date — everything else it will work out or ask about.</p>
+    </div>
+
+    <div class="summary" id="summary" hidden>
+      <div class="summary__route">
+        <span id="sum-origin">—</span>
+        <svg class="summary__arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M14 6l6 6-6 6"
+             fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span id="sum-destination">—</span>
+      </div>
+      <dl class="summary__facts" id="sum-facts"></dl>
+    </div>
+
+    <div class="progress" id="progress" hidden>
+      <div class="progress__head">
+        <h3>Agents at work</h3>
+        <span class="progress__clock" id="progress-clock">0.0s</span>
+      </div>
+      <ul class="agents" id="agents"></ul>
+    </div>
+
+    <div class="notice" id="notice" hidden></div>
+    <div id="plan"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="shell footer__inner">
+    <p>Atlas — a multi-agent trip planner. Fares and rates are live at time of
+       search and are not a booking.</p>
+    <p class="footer__meta">Flights via Google Flights · Stays via Google Hotels ·
+       Weather via Open-Meteo · Attractions via OpenStreetMap</p>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# secrets — never commit
+.env
+.env.local
+
+# generated at runtime
+.cache/
+.trips.sqlite
+*.sqlite
+eval-report*.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

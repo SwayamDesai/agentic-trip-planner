@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # The suite is fully offline: an autouse fixture makes
+      # requests.Session.request raise, so no API keys are needed and no
+      # metered quota can be spent by CI.
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Coverage
+        run: |
+          pip install pytest-cov
+          python -m pytest --cov=. --cov-report=term-missing:skip-covered -q
