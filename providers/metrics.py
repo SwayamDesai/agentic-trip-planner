@@ -18,7 +18,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -84,10 +84,6 @@ def reset() -> RunMetrics:
     with _LOCK:
         _CURRENT = RunMetrics()
         return _CURRENT
-
-
-def current() -> RunMetrics:
-    return _CURRENT
 
 
 def record_llm(agent: str, prompt_tokens: int, completion_tokens: int) -> None:

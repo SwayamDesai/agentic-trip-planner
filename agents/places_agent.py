@@ -23,10 +23,10 @@ start its research last.
 
 import time
 
-from agents.base import _trace, deadline_for, timeout_for
+from agents.base import _trace, deadline_for
 from models import PlaceCandidate, PlaceSearchPlan, PlacesResult, TripState
-from providers import metrics, tracing
-from providers.llm import DeadlineExceeded, invoke_structured
+from providers import metrics
+from providers.llm import invoke_structured
 from tools.geo import geocode
 from tools.places import CATEGORY_FILTERS, city_guide, find_places
 

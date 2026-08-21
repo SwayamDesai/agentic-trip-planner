@@ -155,16 +155,6 @@ def trace_agent(agent: str, **metadata: Any):
             pass
 
 
-def trace_url() -> Optional[str]:
-    c = client()
-    if c is None:
-        return None
-    try:
-        return c.get_trace_url()
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def flush() -> None:
     c = client()
     if c is not None:

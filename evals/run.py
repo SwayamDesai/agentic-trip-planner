@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from evals.cases import CASES, Case, by_id           # noqa: E402
 from evals.scorers import score_expectations, score_plan                  # noqa: E402
 from orchestrator import plan_trip                    # noqa: E402
-from scope import InvalidTripError, resolve_request   # noqa: E402
+from scope import resolve_request                     # noqa: E402
 
 
 def run_case(case: Case, fresh: bool) -> dict:

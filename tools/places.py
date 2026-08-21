@@ -18,7 +18,7 @@ import requests
 from langchain_core.tools import tool
 
 from providers.cache import TTL_STATIC, cached
-from tools.schemas import Place, validate_rows
+from tools.schemas import Place, empty_result, validate_rows
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 WIKIVOYAGE_URL = "https://en.wikivoyage.org/w/api.php"
@@ -150,6 +150,12 @@ def find_places(
                 }
             )
         validated, dropped = validate_rows(out, Place)
+        if not validated:
+            return empty_result(
+                f"{category} places",
+                f"Nothing notable within {radius_km:.0f}km. A wider radius or a "
+                f"different category may help.",
+            )
         return {
             "places": validated[:limit],
             "source": "OpenStreetMap via Overpass",

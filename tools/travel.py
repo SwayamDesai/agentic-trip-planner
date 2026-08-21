@@ -31,6 +31,7 @@ from tools.airports import validate_route
 from tools.schemas import (
     FlightOffer,
     HotelOffer,
+    empty_result,
     parse_money,
     tool_error,
     validate_rows,
@@ -329,7 +330,14 @@ def search_flights(
                     ),
                 }
 
-        return {"options": [], "source": "none"}
+        # A genuine absence, distinguished from a failure: no backend errored,
+        # there simply are no fares. Said explicitly so the agent can report it
+        # instead of guessing, and cached briefly rather than re-queried.
+        return empty_result(
+            "flights",
+            f"No fares were found for {origin_iata}-{destination_iata} on "
+            f"{departure_date}. The route may not be served on these dates.",
+        )
 
     return cached("flights", key, fetch, ttl=TTL_FLIGHTS)
 
@@ -396,6 +404,12 @@ def search_hotels(
             )
 
         out, dropped = validate_rows(rows, HotelOffer)
+        if not out:
+            return empty_result(
+                "hotels",
+                f"No bookable rooms were returned for {city} on those dates.",
+            )
+
         note = "Live Google Hotels rates for the requested dates."
         if dropped:
             # surfaced rather than hidden: silently dropping listings would

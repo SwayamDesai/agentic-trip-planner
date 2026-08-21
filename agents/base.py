@@ -20,15 +20,14 @@ import sys
 import time
 from collections import Counter
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from models import TripRequest, TripState
 from providers import metrics, tracing
 from tools.schemas import summarize_exception, tool_error
 from providers.llm import (
-    DeadlineExceeded,
     AGENT_PROVIDERS,
-    get_llm,
+    DeadlineExceeded,
     invoke_structured,
     invoke_with_retry,
 )

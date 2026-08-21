@@ -149,13 +149,6 @@ def get_llm(
     )
 
 
-def get_structured_llm(agent_name: str, schema, temperature: float = 0.3):
-    """LLM that returns a validated pydantic object of type `schema`."""
-    return get_llm(agent_name, temperature).with_structured_output(
-        schema, method="function_calling"
-    )
-
-
 # Groq raises this when the model answers in prose instead of emitting the
 # forced tool call. It is intermittent on every model tested, so a single
 # attempt is not enough.
@@ -165,7 +158,7 @@ _TOOL_FAILURE_MARKERS = (
     "Failed to call a function",
 )
 
-# Because the fan-out fires three agents at once, they throttle each other.
+# Because the fan-out fires several agents at once, they throttle each other.
 _RATE_LIMIT_MARKERS = ("429", "rate_limit", "rate-limited", "RESOURCE_EXHAUSTED")
 
 

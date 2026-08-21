@@ -21,7 +21,7 @@ from models import (
     CostBreakdown,
     TripState,
 )
-from providers import metrics, tracing
+from providers import metrics
 from providers.llm import DeadlineExceeded, invoke_structured
 
 import time

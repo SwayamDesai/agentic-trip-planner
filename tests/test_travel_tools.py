@@ -168,10 +168,19 @@ def test_month_cache_is_last_resort(monkeypatch):
     assert "OTHER dates" in out["note"]
 
 
-def test_all_backends_empty_reports_none(monkeypatch):
+def test_all_backends_empty_says_why(monkeypatch):
+    """An absence must be distinguishable from a failure.
+
+    `{"options": []}` told the agent nothing: it could not tell "this route is
+    not served" from "the API is down", so it had no basis for reporting the gap
+    honestly instead of guessing.
+    """
     _stub(monkeypatch)
     out = _search()
-    assert out["source"] == "none" and out["options"] == []
+    assert out["error_kind"] == "no_results"
+    assert "ORD-LIS" in out["error"], "names the route that had no fares"
+    assert out["retryable"] is False
+    assert "not retry" in out["guidance"].lower()
 
 
 def test_scraper_exception_does_not_abort(monkeypatch):
@@ -258,3 +267,37 @@ def test_missing_city_names_are_refused(monkeypatch):
         "departure_date": "2026-12-01", "travelers": 2,
     })
     assert out["error_kind"] == "missing_argument"
+
+
+def test_empty_hotels_says_why(monkeypatch):
+    monkeypatch.setattr(travel, "_serpapi", lambda e, x: {"properties": []})
+    out = travel.search_hotels.invoke(
+        {"city": "Nowhereton", "check_in": "2026-12-01", "check_out": "2026-12-03"}
+    )
+    assert out["error_kind"] == "no_results"
+    assert "Nowhereton" in out["error"]
+
+
+def test_genuine_emptiness_is_cached_but_failures_are_not(monkeypatch):
+    """Wiring `empty_result` is what makes the cache's negative-caching branch
+    reachable at all — nothing previously produced an "no_results" kind, so
+    dead routes were re-queried on every run."""
+    from providers import cache
+
+    calls = []
+
+    def empty_then_live():
+        calls.append(1)
+        if len(calls) == 1:
+            return travel.empty_result("flights", "route not served")
+        return {"options": [{"a": 1}], "source": "live"}
+
+    first = cache.cached("t_empty", "k", empty_then_live, ttl=cache.TTL_STATIC)
+    second = cache.cached("t_empty", "k", empty_then_live, ttl=cache.TTL_STATIC)
+    assert first["error_kind"] == "no_results"
+    assert second["error_kind"] == "no_results", "a real absence is reused"
+    assert len(calls) == 1
+
+    # a failure, by contrast, is never stored
+    cache.cached("t_fail", "k", lambda: {"error": "API down"}, ttl=cache.TTL_STATIC)
+    assert cache.cached("t_fail", "k", lambda: {"source": "live"})["source"] == "live"

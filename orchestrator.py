@@ -19,8 +19,6 @@ Wall clock is now the slowest fan-out agent plus itinerary, not the sum of all
 four.
 """
 
-from datetime import date
-
 from langgraph.graph import END, START, StateGraph
 
 from agents.budget_agent import budget_agent

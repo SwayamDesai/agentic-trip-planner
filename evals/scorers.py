@@ -15,9 +15,9 @@ caught by eye. These scorers catch it mechanically.
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Optional
 
-from costs import activity_allowance, nights
+from costs import activity_allowance
 
 
 def evidence_of(state: dict, kind: str) -> list[dict]:
@@ -393,13 +393,6 @@ def score_schema_discipline(state: dict) -> Score:
         "schema", not bad, round(1 - len(bad) / max(len(slots), 1), 3),
         f"invalid slots: {set(bad)}" if bad else "all time slots in the closed set",
     )
-
-
-ALL_SCORERS = (
-    "groundedness", "price_fidelity", "day_coverage", "no_duplicates",
-    "allowance", "density", "weather_aware", "weather_label",
-    "cost_labels", "fare_basis", "budget_verdict", "schema",
-)
 
 
 def score_plan(state: dict) -> Scorecard:

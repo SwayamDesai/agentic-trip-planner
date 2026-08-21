@@ -146,9 +146,6 @@ def validate_rows(rows: list[dict], model: type[BaseModel]) -> tuple[list[dict],
 # So errors are summarised to a kind, one sentence, and whether retrying could
 # possibly help.
 
-RETRYABLE = "retryable"
-PERMANENT = "permanent"
-
 _ERROR_SIGNATURES = [
     # (marker in the raw text, kind, agent-facing message, retryable)
     ("tokens per day", "quota_exhausted",

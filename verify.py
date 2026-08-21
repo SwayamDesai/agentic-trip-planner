@@ -16,8 +16,8 @@ import unicodedata
 from datetime import date, timedelta
 from typing import Iterable, Optional
 
-# Tool payload keys that carry the source rows an agent was supposed to use.
-_PLACE_KEYS = ("places",)
+# Tool payload key carrying the rows an agent was supposed to use. Places are
+# no longer read from payloads — they come from the `places` state key.
 _OPTION_KEYS = ("options",)
 
 # A day of sightseeing should be coherent on foot or a short hop. Generous, so
