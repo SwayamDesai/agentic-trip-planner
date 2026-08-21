@@ -19,6 +19,9 @@ langfuse>=4.0.0
 pytest>=8.0.0
 pytest-cov>=5.0.0
 
+# api gateway
+limits>=5.0.0
+
 # web
 fastapi>=0.115.0
 uvicorn>=0.32.0

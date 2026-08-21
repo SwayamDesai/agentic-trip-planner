@@ -1,0 +1,69 @@
+# Kong in DB-less (declarative) mode — the edge half of the gateway.
+#
+# Kong handles what an edge gateway is good at: coarse, stateless-ish limits
+# that need no knowledge of the application. It CANNOT know that a plan costs
+# 40x a chat turn, because that is not derivable from the URL — so weighted
+# credit metering stays in the app. Same division GitHub uses: an edge limit on
+# requests, and GraphQL "points" computed in the service.
+#
+# Run:  docker compose -f deploy/docker-compose.yml up
+# Then: http://localhost:8000  (proxy)   http://localhost:8001  (admin)
+_format_version: "3.0"
+
+services:
+  - name: atlas
+    url: http://host.docker.internal:8000
+    routes:
+      - name: atlas-all
+        paths: ["/"]
+        strip_path: false
+
+    plugins:
+      # ── coarse request-rate limit ───────────────────────────────────────
+      # Deliberately generous: this is a flood guard, not the business quota.
+      # The app's credit metering is what enforces fairness.
+      - name: rate-limiting
+        config:
+          minute: 60
+          hour: 600
+          policy: local           # `redis` once there is more than one Kong node
+          fault_tolerant: true    # fail OPEN if the counter store is unreachable
+          hide_client_headers: false
+
+      # ── request size ────────────────────────────────────────────────────
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 1   # MB; a trip request is a few hundred bytes
+
+      # ── correlation id ──────────────────────────────────────────────────
+      # So one request can be followed across Kong, the app and Langfuse.
+      - name: correlation-id
+        config:
+          header_name: X-Request-ID
+          generator: uuid
+          echo_downstream: true
+
+      # ── CORS ────────────────────────────────────────────────────────────
+      - name: cors
+        config:
+          origins: ["http://localhost:8000", "http://127.0.0.1:8000"]
+          methods: ["GET", "POST", "OPTIONS"]
+          headers: ["Authorization", "Content-Type", "X-API-Key"]
+          credentials: false
+
+# NOT enabled, and the reason is worth recording:
+#
+#   key-auth      would put identity at the edge, which is the textbook answer.
+#                 Left off because the app already resolves API keys to TIERS,
+#                 and having two places that decide who you are is how they
+#                 drift apart. Kong would only be able to say "valid key", not
+#                 "which tier", so the app would have to look it up again.
+#
+#   proxy-cache   the app's cache is tiered by how fast each kind of data
+#                 changes (365d for coordinates, 6h for a forecast). A single
+#                 edge TTL over /api/plan would be wrong for every one of them.
+#
+#   request-termination / circuit breaker
+#                 the app already reports degraded vs failed with criticality
+#                 tiers. An edge breaker would hide that distinction behind a
+#                 generic 503.

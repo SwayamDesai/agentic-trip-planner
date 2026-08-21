@@ -6,6 +6,7 @@
 .cache/
 .trips.sqlite
 *.sqlite
+.gateway.sqlite
 eval-report*.json
 
 # python

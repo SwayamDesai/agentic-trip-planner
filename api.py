@@ -18,6 +18,7 @@ worker thread and pushes events into a queue that the async endpoint drains.
 
 import asyncio
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -38,6 +39,13 @@ from status import OPTIONAL, REQUIRED
 WEB_DIR = Path(__file__).parent / "web"
 
 app = FastAPI(title="Trip Planner")
+
+# The gateway is opt-in: without it the planner behaves exactly as before, which
+# keeps the metering layer honestly separable from the application.
+if os.getenv("GATEWAY", "").lower() in {"1", "true", "on"}:
+    from gateway import install
+
+    install(app)
 
 
 # --- chat -----------------------------------------------------------------
