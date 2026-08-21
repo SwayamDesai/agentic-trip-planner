@@ -370,3 +370,37 @@ def test_both_backends_meter_weighted_cost_the_same_way(backend, tmp_path, monke
     b = Bucket.per_day(100, burst=100)
     assert limiter.take("u", 60, b).allowed
     assert limiter.take("u", 60, b).allowed is False
+
+
+# --- persistence, which decides the deployed default ---------------------
+
+
+def test_sqlite_bucket_survives_a_new_process(tmp_path):
+    """A fresh store over the same file sees the earlier spend.
+
+    This is what a container restart looks like, and it is why the deployed
+    default is the SQLite bucket rather than `limits`.
+    """
+    b = Bucket(capacity=10, refill_per_second=0)
+    BucketStore(tmp_path / "g.sqlite").take("u", 7, b)
+
+    reopened = BucketStore(tmp_path / "g.sqlite")
+    assert reopened.peek("u", b) == pytest.approx(3, abs=0.1)
+    assert reopened.take("u", 5, b).allowed is False
+
+
+def test_limits_memory_backend_does_not_survive(tmp_path):
+    """Regression note, asserted so the tradeoff cannot be forgotten.
+
+    `limits` has no file-backed store. On memory:// a restart resets every
+    counter, and a mounted volume cannot help — there is nothing on disk to
+    persist. Verified live: restarting the container took global credits from
+    594 back to 600.
+    """
+    from gateway.limiters import LimitsBackend
+
+    b = Bucket.per_day(10, burst=10)
+    LimitsBackend("memory://").take("u", 10, b)
+
+    fresh = LimitsBackend("memory://")          # stands in for a restart
+    assert fresh.take("u", 10, b).allowed, "state was lost, as documented"

@@ -20,6 +20,9 @@ primary_region = "ord"          # near the default origin; latency to Groq is wh
   TRIP_CACHE_DIR = "/data/cache"
   TRIP_DB = "/data/trips.sqlite"
   GATEWAY_DB = "/data/gateway.sqlite"
+  # SQLite-backed, because `limits` without Redis is in-memory and a restart
+  # would hand every caller a fresh quota
+  GATEWAY_LIMITER = "bucket"
 
 [http_service]
   internal_port = 8000

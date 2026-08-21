@@ -26,11 +26,19 @@ USER atlas
 # All mutable state on the volume. Without this the cache and checkpoints live
 # on the container filesystem and vanish on every deploy — which on this app
 # means re-spending LLM quota to rebuild what it already knew.
+# GATEWAY_LIMITER: the SQLite-backed bucket, not the `limits` default.
+# `limits` has no file-backed store, so without Redis it runs in memory and a
+# restart resets every counter — a volume cannot persist what was never on
+# disk. Switch to limits + GATEWAY_STORAGE_URI=redis://... once a Redis exists.
+#
+# (A `#` comment cannot appear inside a line continuation: Docker swallows the
+# rest of the ENV silently, which is how this was set to nothing the first time.)
 ENV TRIP_CACHE_DIR=/data/cache \
     TRIP_DB=/data/trips.sqlite \
     GATEWAY_DB=/data/gateway.sqlite \
     GATEWAY=1 \
-    PORT=8000
+    PORT=8000 \
+    GATEWAY_LIMITER=bucket
 
 EXPOSE 8000
 

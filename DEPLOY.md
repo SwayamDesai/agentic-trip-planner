@@ -22,6 +22,14 @@ convenience:
 | `/data/trips.sqlite` | checkpoints | resumable trips become full re-runs, at ~40k tokens each |
 | `/data/gateway.sqlite` | rate-limit buckets, API keys | every redeploy hands all callers a fresh quota |
 
+The last one has a trap. The `limits` library has no file-backed store, so
+without Redis it runs `memory://` — and then a volume persists nothing, because
+nothing was on disk. Restarting the container took global credits from 594 back
+to 600. The Dockerfile therefore sets `GATEWAY_LIMITER=bucket`, the
+SQLite-backed implementation. With a Redis, switch back:
+`GATEWAY_LIMITER=limits GATEWAY_STORAGE_URI=redis://…` — and that is the only
+correct choice once there is more than one instance.
+
 So: an ephemeral filesystem is not merely lossy here, it is a quota leak.
 
 **4. Single process, deliberately.** Per-run metrics and the Langfuse trace id

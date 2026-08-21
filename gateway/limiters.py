@@ -13,13 +13,26 @@ tradeoff is worth understanding rather than hiding:
   refunds           yes                             not in the API
   battle-tested     no                              yes, widely deployed
 
-So `limits` is the right default for the parts it covers: it is maintained,
-audited and has real storage backends. The hand-rolled one is kept because it
-does two things `limits` does not — separate burst from sustained rate, and
-refund a charge — and because reading it is how you learn what the library is
-doing for you.
+`limits` is the better choice wherever it fits: maintained, audited, and with
+real distributed backends. But note the storage row, because it decides which
+default makes sense where.
 
-Choose with GATEWAY_LIMITER=limits|bucket (default: limits).
+**Deployment gotcha, found the hard way.** `limits` has no file-backed store, so
+without Redis it runs `memory://` — and a restart resets every counter. Mounting
+a volume does not help: there is nothing on disk to persist. A container restart
+therefore hands every caller a fresh quota, which is precisely what the limiter
+exists to prevent. It was verified by restarting the container and watching
+global credits go from 594 back to 600.
+
+So:
+    single process, no Redis   -> GATEWAY_LIMITER=bucket   (persists to SQLite)
+    Redis available            -> GATEWAY_LIMITER=limits   with
+                                  GATEWAY_STORAGE_URI=redis://...
+    multiple instances         -> limits + Redis is the ONLY correct option;
+                                  the SQLite bucket is per-instance
+
+The default here is `limits` because that is right once there is a Redis, and
+the Dockerfile overrides it to `bucket` because the deployed shape has none.
 """
 
 import os
@@ -55,6 +68,9 @@ class LimitsBackend:
     def __init__(self, uri: Optional[str] = None):
         from limits import storage, strategies
 
+        # memory:// does NOT survive a restart. Fine for tests and for a
+        # deployment that has Redis; wrong as a persistent default, which is
+        # why the Dockerfile selects the SQLite-backed bucket instead.
         uri = uri or os.getenv("GATEWAY_STORAGE_URI", "memory://")
         self._storage = storage.storage_from_string(uri)
         self._limiter = strategies.MovingWindowRateLimiter(self._storage)
