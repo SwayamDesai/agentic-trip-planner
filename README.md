@@ -1,4 +1,4 @@
-# Atlas — a multi-agent trip planner
+# Atlas — an agentic multi-agent trip planner
 
 Six specialist agents research live flights, real hotel rates, weather and
 things to do, then reconcile the result against your budget. Every number in
@@ -231,8 +231,8 @@ trace. Fixed by minting one trace ID per run and passing it to every callback.
 ## Getting started
 
 ```bash
-git clone https://github.com/SwayamDesai/atlas-trip-planner.git
-cd atlas-trip-planner
+git clone https://github.com/SwayamDesai/agentic-trip-planner.git
+cd agentic-trip-planner
 
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
