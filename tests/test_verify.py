@@ -417,3 +417,61 @@ def test_short_invented_airline_no_longer_slips_through():
     rows = [{"options": [{"airline": "Aer Lingus", "price_usd": 1104}]}]
     result = _flight("Ae", 1104.0)
     assert any("not in tool results" in w for w in verify_flights(result, rows))
+
+
+# --- closed-day check ---
+
+
+def test_activity_on_a_closed_day_is_flagged():
+    """The most concrete way a plan fails on the ground: a locked door."""
+    from models import PlaceCandidate, PlacesResult
+
+    state = {"places": PlacesResult(city="Seville", candidates=[
+        PlaceCandidate(name="Museo Arqueológico", kind="museum", category="museums",
+                       lat=37.38, lon=-5.99,
+                       opening_hours="Tu-Sa 10:00-17:00")])}
+    # 2026-10-05 is a Monday
+    it = ItineraryResult(days=[DayPlan(date="2026-10-05", activities=[
+        Activity(name="Museo Arqueológico", time_of_day="morning",
+                 duration_hours=2.0)])])
+    warnings = verify_itinerary(it, REQ, state)
+    assert any("Monday" in w and "posted hours" in w for w in warnings)
+
+
+def test_activity_on_an_open_day_is_not_flagged():
+    from models import PlaceCandidate, PlacesResult
+
+    state = {"places": PlacesResult(city="Seville", candidates=[
+        PlaceCandidate(name="Museo Arqueológico", kind="museum", category="museums",
+                       lat=37.38, lon=-5.99,
+                       opening_hours="Tu-Sa 10:00-17:00")])}
+    # 2026-10-06 is a Tuesday
+    it = ItineraryResult(days=[DayPlan(date="2026-10-06", activities=[
+        Activity(name="Museo Arqueológico", time_of_day="morning",
+                 duration_hours=2.0)])])
+    assert not any("posted hours" in w for w in verify_itinerary(it, REQ, state))
+
+
+def test_untagged_place_is_never_flagged():
+    """Most POIs carry no hours; absence must not become a false accusation."""
+    from models import PlaceCandidate, PlacesResult
+
+    state = {"places": PlacesResult(city="Seville", candidates=[
+        PlaceCandidate(name="Torre del Oro", kind="attraction", category="sights",
+                       lat=37.38, lon=-5.99)])}
+    it = ItineraryResult(days=[DayPlan(date="2026-10-05", activities=[
+        Activity(name="Torre del Oro", time_of_day="morning", duration_hours=1.0)])])
+    assert not any("posted hours" in w for w in verify_itinerary(it, REQ, state))
+
+
+def test_seasonal_hours_are_not_flagged():
+    """An unparseable spec must not produce a confident 'closed'."""
+    from models import PlaceCandidate, PlacesResult
+
+    state = {"places": PlacesResult(city="Seville", candidates=[
+        PlaceCandidate(name="Real Alcázar", kind="castle", category="historic",
+                       lat=37.38, lon=-5.99,
+                       opening_hours="Oct-Mar: 09:30-17:00; Apr-Sep: 09:30-19:00")])}
+    it = ItineraryResult(days=[DayPlan(date="2026-10-05", activities=[
+        Activity(name="Real Alcázar", time_of_day="morning", duration_hours=2.0)])])
+    assert not any("posted hours" in w for w in verify_itinerary(it, REQ, state))

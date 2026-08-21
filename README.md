@@ -15,6 +15,17 @@ you: long weekend in Lisbon from Chicago in October, two of us, around $3500
 → live fares, live room rates, real attractions, cost vs budget
 ```
 
+![Agents working in parallel, streamed live over SSE](docs/screenshot-agents.png)
+
+A run takes 60–150s on free-tier models, so the browser watches the agents work
+rather than showing a spinner. The `REQUIRED`/`OPTIONAL` badges make it visible
+*while running* whether a failure will degrade the plan or end it.
+
+![Cost breakdown with an unachievable budget](docs/screenshot-plan.png)
+
+The budget verdict is arithmetic over the agents' own figures, so it cannot be
+flattering. Here the trip genuinely does not fit, and the plan says so first.
+
 ---
 
 ## Why this exists
@@ -127,6 +138,19 @@ destination SVQ is Sevilla Airport in Sevilla, 205km from Granada
 A wrong-but-real code returns valid fares for the wrong city, and nothing
 downstream can detect it.
 
+**Closed-day detection.** `opening_hours` is read from OpenStreetMap and parsed
+narrowly — the parser answers only "is this closed on this weekday", and returns
+*unknown* for anything it cannot read confidently. Claiming a place is shut when
+it is open is worse than saying nothing:
+
+```
+'Museo Arqueológico' is scheduled for 2026-10-05 (Monday)
+but its posted hours are "Tu-Sa 10:00-17:00"
+```
+
+Candidates are labelled `[closed Mo]` in the itinerary prompt, and the schedule
+is checked again afterwards.
+
 **Loop limits.** Three, because they fail differently: `MAX_ROUNDS` (never stops
 asking), `MAX_TOTAL_CALLS` (asks for many different things, never converging),
 `MAX_REPEATS` (re-asks the same question, ignoring the answer).
@@ -214,7 +238,36 @@ would test for sameness rather than quality. Cases cover feasible/infeasible/no
 budget, tiny airports, non-Latin place names, inside vs beyond the forecast
 window, 1 night vs 10, and injected agent failure.
 
-Exit code is non-zero on a critical failure, so it works as a CI gate.
+Exit code is non-zero on a critical failure **or a regression against the
+baseline**, so it works as a CI gate.
+
+### Record / replay
+
+Evals against live models cost tokens and are not comparable between runs —
+prices move, so a prompt regression is indistinguishable from a change in the
+world.
+
+```bash
+EVAL_MODE=record python -m evals.run     # capture responses once
+EVAL_MODE=replay python -m evals.run     # free, deterministic, repeatable
+```
+
+Keys derive from the agent, schema, full message list and temperature, so
+editing a prompt **misses on purpose** — which is exactly the signal you want
+when checking whether the edit helped. A replay miss is an error, never a silent
+fall-through to a live call: a replay that quietly went live would be neither
+free nor reproducible while appearing to be both.
+
+### Baseline
+
+```bash
+python -m evals.run --save-baseline      # store current scores
+python -m evals.run                      # compare, report regressions
+```
+
+An absolute threshold cannot see a score sliding from 1.0 to 0.7 — both pass any
+gate below 0.7. The baseline is committed, so a regression appears as a diff in
+review. A scorer that silently *stopped running* also counts as a regression.
 
 ### Observability
 
@@ -293,7 +346,8 @@ status.py          criticality tiers
 agents/            one module per agent, plus the shared two-phase loop
 tools/             tool definitions, output schemas, airport data
 providers/         LLM routing, cache, checkpointing, metrics, tracing
-evals/             golden set, scorers, runner
+evals/             golden set, scorers, runner, baseline, fixtures
+hours.py           OSM opening_hours parsing
 web/              single-page UI (no build step)
 tests/            372 tests
 ```
@@ -305,8 +359,10 @@ tests/            372 tests
 Stated plainly, because a portfolio project that claims to be production-ready
 is less credible than one that knows what it isn't.
 
-- **No opening-hours data.** Nothing free provides it, so the itinerary can
-  schedule a museum on its closed day.
+- **Opening hours are partial.** Roughly a third of notable POIs carry an OSM
+  `opening_hours` tag, and seasonal rules (`Oct-Mar: …`) are deliberately left
+  unparsed. Coverage is real but incomplete, so a closed door is caught only
+  when the data exists and the spec is simple enough to read confidently.
 - **Return-leg times unavailable.** The round-trip *price* is correct; Google
   returns only outbound itineraries in one call, and the agent is told not to
   invent the rest.

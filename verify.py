@@ -152,6 +152,25 @@ def verify_itinerary(itinerary, req, state: dict) -> list[str]:
                     f"budget and must not be costed here"
                 )
 
+    # a closed door is the most concrete way a plan can fail on the ground
+    from hours import closed_on
+
+    for day in days:
+        try:
+            when = date.fromisoformat(day.date)
+        except ValueError:
+            continue
+        for activity in day.activities or []:
+            candidate = catalogue.get(_norm(activity.name))
+            if candidate is None:
+                continue
+            if closed_on(candidate.opening_hours, when) is True:
+                problems.append(
+                    f"{activity.name!r} is scheduled for {day.date} "
+                    f"({when.strftime('%A')}) but its posted hours are "
+                    f"\"{candidate.opening_hours}\""
+                )
+
     # a day should be walkable: stops spread across a region are not a plan
     for day in days:
         coords = [

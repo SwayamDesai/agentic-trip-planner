@@ -98,6 +98,9 @@ class PlaceCandidate(BaseModel):
 
     name: str
     kind: Optional[str] = None
+    opening_hours: Optional[str] = Field(
+        default=None, description="raw OSM opening_hours tag, if tagged"
+    )
     category: str = Field(description="the search category that found it")
     lat: float
     lon: float

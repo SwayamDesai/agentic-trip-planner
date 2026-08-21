@@ -215,6 +215,13 @@ def invoke_with_retry(
     200k/day budget will still be exhausted after any sleep, so the useful
     move is to switch keys, and only sleep once the chain is used up.
     """
+    from providers import replay
+
+    if replay.active():
+        key = replay.key_for(agent_name, messages, temperature, None)
+        if replay.mode() == "replay":
+            return replay.lookup(agent_name, key, None)
+
     chain_len = len(profiles_for(agent_name))
     last_exc = None
 
@@ -224,7 +231,10 @@ def invoke_with_retry(
         if tools:
             llm = llm.bind_tools(tools)
         try:
-            return llm.invoke(messages)
+            reply = llm.invoke(messages)
+            if replay.mode() == "record":
+                replay.store(agent_name, key, reply)
+            return reply
         except Exception as exc:  # noqa: BLE001 - inspected, then re-raised
             if not any(m in str(exc) for m in _RATE_LIMIT_MARKERS):
                 raise
@@ -269,6 +279,13 @@ def invoke_structured(
     Anything else (missing key, unknown model) can never succeed on retry and
     is raised immediately.
     """
+    from providers import replay
+
+    if replay.active():
+        key = replay.key_for(agent_name, messages, temperature, schema)
+        if replay.mode() == "replay":
+            return replay.lookup(agent_name, key, schema)
+
     methods = [
         ("function_calling", temperature),
         ("function_calling", min(temperature + 0.2, 1.0)),
@@ -289,6 +306,8 @@ def invoke_structured(
             ).with_structured_output(schema, method=method)
             result = llm.invoke(messages)
             if result is not None:
+                if replay.mode() == "record":
+                    replay.store(agent_name, key, result)
                 return result
             last_exc = RuntimeError("model returned no structured output")
             i += 1

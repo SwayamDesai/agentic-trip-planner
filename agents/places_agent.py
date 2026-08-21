@@ -183,6 +183,7 @@ def places_agent(state: TripState) -> TripState:
                 PlaceCandidate(
                     name=place["name"],
                     kind=place.get("kind"),
+                    opening_hours=place.get("opening_hours"),
                     category=category,
                     lat=place["lat"],
                     lon=place["lon"],

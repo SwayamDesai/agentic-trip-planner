@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from evals import baseline as baseline_mod            # noqa: E402
 from evals.cases import CASES, Case, by_id           # noqa: E402
 from evals.scorers import score_expectations, score_plan                  # noqa: E402
 from orchestrator import plan_trip                    # noqa: E402
@@ -106,7 +107,19 @@ def main() -> int:
     p.add_argument("--repeat", type=int, default=1, help="runs per case (tier 3)")
     p.add_argument("--fresh", action="store_true", help="ignore saved plans")
     p.add_argument("--out", help="write the full report as JSON")
+    p.add_argument(
+        "--save-baseline", action="store_true",
+        help="overwrite evals/baseline.json with this run's scores",
+    )
+    p.add_argument(
+        "--no-baseline", action="store_true", help="skip the regression check"
+    )
     args = p.parse_args()
+
+    from providers import replay
+
+    if replay.active():
+        print(f"EVAL_MODE={replay.mode()}  fixtures={replay.stats()['total']}\n")
 
     cases = [by_id(c) for c in args.case] if args.case else CASES
     results = []
@@ -135,16 +148,42 @@ def main() -> int:
                 flush=True,
             )
 
-    report = {"summary": summarise(results), "results": results}
+    summary = summarise(results)
+    report = {"summary": summary, "results": results}
 
     print("\n" + "=" * 64)
-    print(json.dumps(report["summary"], indent=1))
+    print(json.dumps(summary, indent=1))
+
+    # regression check: an absolute gate cannot see a score sliding from 1.0
+    # to 0.7, because both pass any threshold below 0.7
+    comparison = {"status": "skipped"}
+    if not args.no_baseline:
+        comparison = baseline_mod.compare(summary, baseline_mod.load())
+        report["baseline"] = comparison
+        print("\n--- vs baseline ---")
+        if comparison["status"] == "no_baseline":
+            print("  none stored yet; run with --save-baseline to create one")
+        elif comparison["regressions"]:
+            for r in comparison["regressions"]:
+                print(
+                    f"  REGRESSED {r['score']}: {r['before']} -> {r['after']}"
+                    + (f"  ({r['delta']:+})" if "delta" in r else f"  ({r['detail']})")
+                )
+        else:
+            print("  no regressions")
+        for i in comparison.get("improvements", []):
+            print(f"  improved  {i['score']}: {i['before']} -> {i['after']}")
+        for n in comparison.get("new_scorers", []):
+            print(f"  new       {n}")
+
+    if args.save_baseline:
+        print(f"\nwrote {baseline_mod.save(summary)}")
 
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
-        print(f"\nwrote {args.out}")
+        print(f"wrote {args.out}")
 
-    return 1 if report["summary"]["critical_failures"] else 0
+    return 1 if (summary["critical_failures"] or comparison.get("regressions")) else 0
 
 
 if __name__ == "__main__":

@@ -143,6 +143,10 @@ def find_places(
             out.append(
                 {
                     "name": english or local,
+                    # present on roughly a third of notable POIs; absent is
+                    # normal and must never exclude a place
+                    **({"opening_hours": tags["opening_hours"]}
+                       if tags.get("opening_hours") else {}),
                     **({"local_name": local} if english and english != local else {}),
                     "kind": kind,
                     "lat": round(centre["lat"], 5),

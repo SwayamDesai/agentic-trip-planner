@@ -110,6 +110,7 @@ class DayWeather(_Money):
 class Place(_Money):
     name: str
     kind: Optional[str] = None
+    opening_hours: Optional[str] = None
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 

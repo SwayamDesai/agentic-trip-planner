@@ -48,7 +48,9 @@ COSTS: you have no price data — no tool provides entry fees. Every non-zero
 cost is YOUR ESTIMATE and its notes must say "estimated". Keep estimates
 conservative. Places marked `[free]` in the list cost 0; do not price them.
 
-You cannot know opening hours or closing days. Never claim a place is open."""
+CLOSING DAYS: some candidates are marked `[closed Mo]` or similar. Never
+schedule one on a day it is closed. Places with no marker have no published
+hours — that means unknown, not open, so do not assert that any place is open."""
 
 
 def _candidate_lines(places, allowance) -> str:
@@ -59,10 +61,15 @@ def _candidate_lines(places, allowance) -> str:
     reasoning about admission policy.
     """
     from costs import is_free_kind
+    from hours import describe
 
     lines = []
     for i, c in enumerate(places.candidates[:MAX_CANDIDATES], 1):
         marker = " [free]" if is_free_kind(c.kind, c.category) else ""
+        # only shown when the tag is present AND parseable; silence means
+        # unknown, not open
+        shut = describe(c.opening_hours)
+        marker += f" [{shut}]" if shut else ""
         lines.append(
             f"{i:2}. {c.name}{marker} — {c.kind or c.category} "
             f"({c.lat:.4f}, {c.lon:.4f})"
