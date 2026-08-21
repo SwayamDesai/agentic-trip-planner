@@ -1,0 +1,57 @@
+# Fly.io deployment.
+#
+# Chosen over Render or Railway for three reasons specific to this app:
+#   * persistent volumes on the free allowance, which this needs — the cache and
+#     checkpoints are the difference between a warm plan and re-spending quota
+#   * no request timeout that would cut off a 60-150s SSE stream
+#   * a single always-addressable machine, matching the single-process state
+#
+# Vercel and other serverless platforms are NOT suitable: their function
+# timeouts (10-60s) are shorter than one plan, and there is no local disk.
+
+app = "atlas-trip-planner"
+primary_region = "ord"          # near the default origin; latency to Groq is what matters
+
+[build]
+
+[env]
+  PORT = "8000"
+  GATEWAY = "1"
+  TRIP_CACHE_DIR = "/data/cache"
+  TRIP_DB = "/data/trips.sqlite"
+  GATEWAY_DB = "/data/gateway.sqlite"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+
+  # One machine, and no autoscaling. Scaling out would give each instance its
+  # own in-process concurrency limiter and its own cache, so N instances would
+  # multiply the upstream quota draw by N while each believed it was compliant.
+  min_machines_running = 0
+  max_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 12
+    soft_limit = 6
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/health"
+
+# The cache, checkpoints and gateway buckets. Without it every deploy starts
+# cold: no cached POIs, no resumable trips, and rate-limit counters reset — so
+# a redeploy would hand everyone a fresh quota.
+[[mounts]]
+  source = "atlas_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"        # measured under 300MB; the models run remotely

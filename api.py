@@ -45,7 +45,7 @@ app = FastAPI(title="Trip Planner")
 if os.getenv("GATEWAY", "").lower() in {"1", "true", "on"}:
     from gateway import install
 
-    install(app)
+    install(app, db_path=os.getenv("GATEWAY_DB", ".gateway.sqlite"))
 
 
 # --- chat -----------------------------------------------------------------
@@ -207,6 +207,35 @@ async def plan(
 
 
 # --- static ---------------------------------------------------------------
+
+
+@app.get("/health")
+def health() -> dict:
+    """Liveness and readiness for the platform's health check.
+
+    Reports whether the model provider is configured, because a container that
+    boots without keys is running but cannot plan anything — and a health check
+    that only proves the process started would call that healthy.
+
+    Deliberately does no LLM call: a health probe that spends quota is a health
+    probe that takes the service down.
+    """
+    from providers.llm import PROFILES
+
+    configured = sorted(
+        {
+            key_name
+            for _, _, key_name in PROFILES.values()
+            if os.getenv(key_name)
+        }
+    )
+    return {
+        "status": "ok" if configured else "degraded",
+        "llm_keys_configured": len(configured),
+        "detail": (
+            "ready" if configured else "no model provider key is set; planning will fail"
+        ),
+    }
 
 
 @app.get("/")

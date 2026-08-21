@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.github/
+
+# secrets and local state — never in an image
+.env
+.env.local
+.cache/
+*.sqlite
+evals/fixtures/
+
+docs/
+deploy/
+*.md
