@@ -1,0 +1,57 @@
+# Running the whole system: two processes, one image.
+#
+#   docker compose up                 # api + one worker
+#   docker compose up --scale worker=3   # three workers, same queue
+#
+# The split is the point. `api` never plans anything — it serves the site,
+# accepts jobs and reports results. `worker` does the planning. That is why a
+# deploy no longer destroys work in flight, and why capacity is added by
+# starting more workers rather than by making the web server bigger.
+services:
+  api:
+    build: .
+    command: >
+      sh -c "python -m uvicorn api:app --host 0.0.0.0 --port 8000
+             --workers 1 --timeout-keep-alive 75"
+    ports:
+      - "8000:8000"
+    volumes:
+      - atlas_data:/data
+    env_file: .env
+    environment:
+      GATEWAY: "1"
+      GATEWAY_LIMITER: bucket
+      TRIP_CACHE_DIR: /data/cache
+      TRIP_DB: /data/trips.sqlite
+      GATEWAY_DB: /data/gateway.sqlite
+      JOBS_DB: /data/jobs.sqlite
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "worker.py"]
+    volumes:
+      - atlas_data:/data        # same volume: the queue is a file both can see
+    env_file: .env
+    environment:
+      TRIP_CACHE_DIR: /data/cache
+      TRIP_DB: /data/trips.sqlite
+      JOBS_DB: /data/jobs.sqlite
+    # SIGTERM makes the worker finish its current job and exit, so give it
+    # longer than one plan takes before Docker escalates to SIGKILL. Too short
+    # and a rolling restart kills work mid-plan — the thing the queue exists to
+    # prevent.
+    stop_grace_period: 200s
+    restart: unless-stopped
+
+# Shared because the queue and the caches are files. This is exactly the
+# constraint Phase 2 removes: Postgres and Redis replace the shared volume, and
+# then api and worker need nothing in common but a network.
+volumes:
+  atlas_data:

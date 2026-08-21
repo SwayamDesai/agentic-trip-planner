@@ -308,8 +308,12 @@ Overpass and Wikivoyage are all keyless.
 
 ### Run it
 
+Two processes: the API serves and accepts jobs, a worker plans them. Starting
+only the API leaves plans queued forever — see [RUNNING.md](RUNNING.md).
+
 ```bash
-./run.sh                                    # web UI at http://127.0.0.1:8000
+./run.sh                                    # both, web UI at http://127.0.0.1:8000
+docker compose up --scale worker=3          # production-shaped, three workers
 
 python main.py --destination Lisbon --start 2026-10-05
 python main.py --destination Seville --start 2026-10-05 --nights 3 \

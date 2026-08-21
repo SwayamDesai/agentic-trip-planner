@@ -46,8 +46,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,os,sys; \
 sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\",8000)}/health', timeout=4).status==200 else 1)"
 
-# ONE worker, deliberately. Per-run metrics and the Langfuse trace id are
-# module-level, and the concurrency limiter is in-process — several workers
-# would interleave them and each keep its own limiter. Concurrency is bounded
-# by the gateway instead, which is what the quota wants anyway.
+# One image, two roles. The default serves the API; `docker run … python
+# worker.py` runs a worker. Same code, same dependencies, so they cannot drift
+# apart — which is why a single image is preferred over one per process.
+#
+# One uvicorn worker: the gateway's concurrency limiter is in-process, so
+# several web workers would each keep their own. Plan capacity comes from
+# running more WORKER containers, which is the whole point of the split.
 CMD ["sh", "-c", "python -m uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 75"]
