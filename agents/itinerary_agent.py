@@ -17,6 +17,7 @@ from costs import activity_allowance
 from models import ItineraryResult, TripState
 from status import blocked_by_failure
 from verify import verify_itinerary
+from providers import prompts
 
 # Candidate list sent to the model. Enough to choose from, small enough that
 # the prompt stays inside a single-call token budget.
@@ -26,31 +27,6 @@ MAX_CANDIDATES = 40
 # the instruction and the grader cannot drift apart.
 MIN_PER_DAY = 2
 MAX_PER_DAY = 5
-
-SYSTEM = f"""You arrange real places into a day-by-day itinerary.
-
-You are given a numbered list of CANDIDATE PLACES. It is the only source of
-places you may use.
-
-RULES:
-- Use ONLY candidates from the list, by their exact name. If a famous
-  attraction is not on the list, it does not go in the plan.
-- One entry per trip day, in date order, covering every day.
-- {MIN_PER_DAY} to {MAX_PER_DAY} activities per day. Meals count as activities.
-- Group places that are geographically close on the same day, using the
-  coordinates given.
-- Arrival day light, departure day short.
-- Use each place at most once across the whole trip.
-- If a weather outlook is given, put indoor activities on wet days and set
-  `indoor: true`.
-
-COSTS: you have no price data — no tool provides entry fees. Every non-zero
-cost is YOUR ESTIMATE and its notes must say "estimated". Keep estimates
-conservative. Places marked `[free]` in the list cost 0; do not price them.
-
-CLOSING DAYS: some candidates are marked `[closed Mo]` or similar. Never
-schedule one on a day it is closed. Places with no marker have no published
-hours — that means unknown, not open, so do not assert that any place is open."""
 
 
 def _candidate_lines(places, allowance) -> str:
@@ -154,7 +130,11 @@ def itinerary_agent(state: TripState) -> TripState:
         name="itinerary",
         state=state,
         schema=ItineraryResult,
-        system=SYSTEM,
+        system=prompts.get(
+            "itinerary",
+            min_per_day=MIN_PER_DAY,
+            max_per_day=MAX_PER_DAY,
+        ).text,
         user="\n\n".join(prompt),
         temperature=0.4,
         verify=lambda result: verify_itinerary(result, req, state),

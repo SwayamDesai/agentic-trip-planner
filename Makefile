@@ -18,7 +18,7 @@ FULL        := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml -f c
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache test deploy
+.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache prompts prompts-push test deploy
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -76,6 +76,12 @@ cache: ## LLM response cache: entry count and a sample
 	  echo "keys without a TTL (rate-limit counters, must not be evicted):"; \
 	  redis-cli --scan --pattern "*" | head -20 | while read k; do \
 	    t=$$(redis-cli ttl "$$k"); [ "$$t" = "-1" ] && echo "  $$k"; done; true'
+
+prompts: ## what each prompt resolves to, and from where
+	$(dc) $(FULL) exec app python -m providers.prompts status
+
+prompts-push: ## seed the Langfuse prompt registry from the shipped defaults
+	$(dc) $(FULL) exec app python -m providers.prompts
 
 test: ## run the test suite inside the app container
 	$(dc) $(DATA) exec app python -m pytest -q

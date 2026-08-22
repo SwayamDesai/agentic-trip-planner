@@ -248,7 +248,9 @@ def test_categories_are_chosen_by_the_agent(monkeypatch):
         )
 
     monkeypatch.setattr(mod, "invoke_structured", fake)
-    categories, why = mod._choose_categories("Seville", [], "Capital of Andalusia")
+    categories, why = mod._choose_categories(
+        "Seville", [], "Capital of Andalusia", "system prompt"
+    )
     assert categories == ["historic", "sights"]
     assert "Moorish" in why
     assert "stated no particular interests" in seen["prompt"]
@@ -266,7 +268,7 @@ def test_stated_interests_reach_the_agent(monkeypatch):
         return PlaceSearchPlan(categories=["food"], reasoning="ok")
 
     monkeypatch.setattr(mod, "invoke_structured", fake)
-    mod._choose_categories("Lyon", ["food", "wine"], "")
+    mod._choose_categories("Lyon", ["food", "wine"], "", "system prompt")
     assert "food, wine" in seen["prompt"]
 
 
@@ -279,7 +281,7 @@ def test_unknown_category_from_the_model_is_dropped(monkeypatch):
         reasoning = "x"
 
     monkeypatch.setattr(mod, "invoke_structured", lambda *a, **k: Loose())
-    categories, _ = mod._choose_categories("Berlin", [], "")
+    categories, _ = mod._choose_categories("Berlin", [], "", "system prompt")
     assert categories == ["historic"], "unknown dropped, duplicate collapsed"
 
 
@@ -291,7 +293,9 @@ def test_model_failure_falls_back_deterministically(monkeypatch):
         raise RuntimeError("rate limited")
 
     monkeypatch.setattr(mod, "invoke_structured", boom)
-    categories, why = mod._choose_categories("Seville", ["history"], "")
+    categories, why = mod._choose_categories(
+        "Seville", ["history"], "", "system prompt"
+    )
     assert categories == ["sights", "historic"]
     assert "fell back" in why
 
@@ -310,5 +314,7 @@ def test_empty_category_list_falls_back(monkeypatch):
         reasoning = "x"
 
     monkeypatch.setattr(mod, "invoke_structured", lambda *a, **k: Empty())
-    categories, why = mod._choose_categories("Seville", ["food"], "")
+    categories, why = mod._choose_categories(
+        "Seville", ["food"], "", "system prompt"
+    )
     assert categories == ["sights", "food"] and "fell back" in why

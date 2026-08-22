@@ -23,32 +23,12 @@ start its research last.
 
 import time
 
-from agents.base import _trace, bind, deadline_for
+from agents.base import _trace, agent_span, bind, deadline_for
 from models import PlaceCandidate, PlaceSearchPlan, PlacesResult, TripState
-from providers import metrics, tracing
+from providers import metrics, prompts
 from providers.llm import invoke_structured
 from tools.geo import geocode
 from tools.places import CATEGORY_FILTERS, city_guide, find_places
-
-SYSTEM = """You decide what kinds of place to research for a trip.
-
-Choose 2-3 categories from exactly these, most important first:
-  sights   — landmarks, viewpoints, notable attractions
-  museums  — museums and galleries
-  historic — castles, palaces, monasteries, city walls, old quarters
-  food     — restaurants and cafes
-
-Choose on what the DESTINATION is actually known for, not on a generic
-template. Seville rewards historic architecture; Lyon food; Bergen viewpoints
-and the outdoors; Florence museums.
-
-If the traveller stated interests, honour them — but they usually state none,
-and "no interests given" is not a reason to default blindly. Use the city
-description to judge.
-
-Always include at least one category that covers general sightseeing unless the
-destination is genuinely specialised."""
-
 
 # Fallback only, for when the model call fails. Interests map to Overpass
 # categories; "sights" is always included so a trip still has somewhere to go.
@@ -88,7 +68,9 @@ def categories_for(preferences: list[str]) -> list[str]:
     return chosen
 
 
-def _choose_categories(destination: str, preferences: list[str], guide: str):
+def _choose_categories(
+    destination: str, preferences: list[str], guide: str, system: str
+):
     """Ask which categories suit this destination. Falls back if unavailable."""
     stated = (
         f"The traveller mentioned: {', '.join(preferences)}."
@@ -100,7 +82,7 @@ def _choose_categories(destination: str, preferences: list[str], guide: str):
             "places",
             PlaceSearchPlan,
             [
-                {"role": "system", "content": SYSTEM},
+                {"role": "system", "content": system},
                 {
                     "role": "user",
                     "content": (
@@ -129,25 +111,39 @@ def _choose_categories(destination: str, preferences: list[str], guide: str):
 
 
 def places_agent(state: TripState) -> TripState:
-    """Gather real candidate places for the destination."""
+    """Gather real candidate places for the destination.
+
+    The span lives here rather than inside `_research`, which has four ways to
+    return. Closing it on each of them worked until someone added a fifth.
+    """
     bind(state)
     if state.get("places") is not None:
         _trace("places", "skip (cached from earlier run)", time.perf_counter())
         metrics.record_outcome("places", "skipped", 0.0)
         return {}
 
+    # Resolved before the span opens, so the span can record which version was
+    # used. The tool-agent helpers get this for free — their call sites resolve
+    # the prompt while evaluating arguments — but this node opens its own span.
+    prompt = prompts.get("places")
+    with agent_span(
+        "places",
+        destination=state["request"].destination,
+        prompt=prompt.label,
+    ):
+        return _research(state, prompt.text)
+
+
+def _research(state: TripState, system: str) -> TripState:
+    """Locate the city, choose categories, and pull real candidates."""
     t0 = time.perf_counter()
     _trace("places", "start", t0)
-    span = tracing.trace_agent("places", destination=state["request"].destination)
-    span.__enter__()
     req = state["request"]
 
     location = geocode(req.destination)
     if location.get("lat") is None:
         _trace("places", "FAILED geocode", t0)
         metrics.record_outcome("places", "failed", time.perf_counter() - t0)
-        span.__exit__(None, None, None)
-        tracing.flush()
         return {
             "places": None,
             "errors": [
@@ -168,7 +164,7 @@ def places_agent(state: TripState) -> TripState:
         guide = ""
 
     categories, rationale = _choose_categories(
-        req.destination, req.preferences, guide
+        req.destination, req.preferences, guide, system
     )
     _trace("places", f"categories {','.join(categories)}", time.perf_counter())
 
@@ -210,8 +206,6 @@ def places_agent(state: TripState) -> TripState:
     if not candidates:
         _trace("places", "FAILED no candidates", t0)
         metrics.record_outcome("places", "failed", time.perf_counter() - t0)
-        span.__exit__(None, None, None)
-        tracing.flush()
         return {
             "places": None,
             "errors": [
@@ -228,8 +222,6 @@ def places_agent(state: TripState) -> TripState:
         rationale=rationale,
     )
     metrics.record_outcome("places", "done", time.perf_counter() - t0)
-    span.__exit__(None, None, None)
-    tracing.flush()
     _trace("places", f"done ({len(candidates)} candidates)", t0)
 
     return {

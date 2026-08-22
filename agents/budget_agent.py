@@ -11,7 +11,14 @@ The model never sees a blank total to fill in, so it cannot invent one. This
 mirrors `synthesize`: anything derivable is derived, not generated.
 """
 
-from agents.base import _trace, bind, deadline_for, describe_request, timeout_for
+from agents.base import (
+    _trace,
+    agent_span,
+    bind,
+    deadline_for,
+    describe_request,
+    timeout_for,
+)
 from costs import activity_allowance, compute_breakdown
 from tools.schemas import summarize_exception
 from verify import verify_breakdown_arithmetic, verify_budget_cap
@@ -21,50 +28,10 @@ from models import (
     CostBreakdown,
     TripState,
 )
-from providers import metrics, tracing
+from providers import metrics, prompts
 from providers.llm import DeadlineExceeded, invoke_structured
 
 import time
-
-SYSTEM = """You review whether a planned trip fits its budget.
-
-You are given a breakdown that is ALREADY CALCULATED. Your job is judgement,
-not arithmetic.
-
-CRITICAL — read the `tier` line before advising.
-
-  tier=cheapest  A budget was given, so the subtotal already uses the CHEAPEST
-                 flight and lodging. It is a FLOOR. "Pick something cheaper" is
-                 not available, and trimming a $20 museum against a $600
-                 shortfall is not useful advice.
-  tier=mid       No budget was given, so a middle option was costed. Cheaper
-                 choices DO exist and are worth naming.
-
-If the breakdown says NOT ACHIEVABLE, say so first and plainly: the cheapest
-travel and lodging alone exceed the budget, so no itinerary fits it. Do not
-soften this or imply small savings could close the gap.
-
-When the trip is over budget, the honest levers are, roughly in order of size:
-  - fewer nights, or different dates (lodging and fares both move a lot)
-  - a nearby airport, or accepting more stops, if the option list shows one
-  - dropping paid activities — only worth mentioning if it is material
-  - raising the budget, if the gap cannot realistically be closed
-Say plainly when the trip simply cannot fit; that is more useful than a token
-saving. Do not pad the list to reach four items.
-
-YOU MUST NOT: recompute the total, restate a figure differently, or introduce a
-number you were not given. If the arithmetic looks wrong, say so in
-`assessment` rather than silently correcting it.
-
-RULES:
-- `assessment`: at most two sentences, stating plainly whether it fits.
-- `suggestions`: only genuinely material ones. Reference REAL options from the
-  lists provided where relevant. Never generic advice like "book early".
-- `unbudgeted`: what the subtotal omits. Food and local transport are never
-  counted (meals in the itinerary are deliberately not priced). Do not invent
-  dollar amounts for them.
-- If `missing` names agents that produced nothing, say the subtotal is
-  incomplete and cannot be compared to the budget with confidence."""
 
 
 def _describe(state: TripState, breakdown: CostBreakdown) -> str:
@@ -142,18 +109,25 @@ def budget_agent(state: TripState) -> TripState:
     pure arithmetic — and only calls the model when the numbers actually moved.
     """
     bind(state)
-    t0 = time.perf_counter()
-    span = tracing.trace_agent("budget")
-    span.__enter__()
     breakdown = compute_breakdown(state)
 
     prior = state.get("budget")
     if prior is not None and prior.advice is not None and prior.breakdown == breakdown:
         _trace("budget", "skip (breakdown unchanged)", time.perf_counter())
         metrics.record_outcome("budget", "skipped", 0.0)
-        span.__exit__(None, None, None)
         return {}
 
+    # The span wraps only the part that can fail. Both failure paths below used
+    # to leave it open, which lost it from the trace.
+    # Resolved before the span opens, so the span records the version used.
+    prompt = prompts.get("budget")
+    with agent_span("budget", prompt=prompt.label):
+        return _advise(state, breakdown, prompt.text)
+
+
+def _advise(state: TripState, breakdown: CostBreakdown, system: str) -> TripState:
+    """Ask the model to interpret figures it cannot change."""
+    t0 = time.perf_counter()
     _trace("budget", "start", t0)
 
     try:
@@ -161,7 +135,7 @@ def budget_agent(state: TripState) -> TripState:
             "budget",
             BudgetAdvice,
             [
-                {"role": "system", "content": SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": _describe(state, breakdown)},
             ],
             0.2,
@@ -169,8 +143,6 @@ def budget_agent(state: TripState) -> TripState:
         )
         _trace("budget", "done", t0)
         metrics.record_outcome("budget", "done", time.perf_counter() - t0)
-        span.__exit__(None, None, None)
-        tracing.flush()
         update = {"budget": BudgetResult(breakdown=breakdown, advice=advice)}
         checks = verify_breakdown_arithmetic(breakdown) + verify_budget_cap(
             breakdown, activity_allowance(state)

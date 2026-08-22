@@ -15,6 +15,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from agents.base import deadline_for
+from providers import prompts
 from providers.llm import invoke_structured
 
 REQUIRED_FIELDS = ("origin", "destination", "start_date")
@@ -45,27 +46,6 @@ class TripExtraction(BaseModel):
     )
 
 
-SYSTEM = """You collect trip details from a conversation. Today is {today}.
-
-Extract only what the traveller has actually said or clearly implied. Leave a
-field null rather than guessing it.
-
-Resolve relative dates against today: "next month" -> the 1st of next month,
-"first week of October" -> that month's 1st. Always output YYYY-MM-DD.
-
-Set `nights` ONLY if a length was stated ("4 nights", "long weekend" = 3).
-Set `travelers` ONLY if a number was stated; "my wife and I" is 2, "solo" is 1.
-Set `budget_usd` ONLY if an amount was stated; "around 3k" is 3000. A budget is
-a hard cap, so never invent one.
-
-You need origin, destination and a start date. If any is missing, ask for the
-missing ones in `reply` — briefly, and all at once rather than one at a time.
-If you have all three, confirm the trip in one sentence and say you are
-planning it. Do not list what you defaulted.
-
-Never invent prices, airlines or hotels; you only gather requirements."""
-
-
 def extract(history: list[dict], message: str) -> TripExtraction:
     """Merge a new message into what earlier turns established."""
     transcript = "\n".join(
@@ -75,7 +55,12 @@ def extract(history: list[dict], message: str) -> TripExtraction:
         "chat",
         TripExtraction,
         [
-            {"role": "system", "content": SYSTEM.format(today=date.today().isoformat())},
+            {
+                "role": "system",
+                "content": prompts.get(
+                    "chat", today=date.today().isoformat()
+                ).text,
+            },
             {
                 "role": "user",
                 "content": (

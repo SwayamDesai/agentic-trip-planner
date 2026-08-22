@@ -279,6 +279,43 @@ One subtlety: the fan-out runs in worker threads, and OpenTelemetry context does
 not cross a thread boundary — so each agent would open its own disconnected
 trace. Fixed by minting one trace ID per run and passing it to every callback.
 
+Spans must be closed by the code that opened them, not by the garbage collector.
+Entering a context manager without a `finally` appears to work — CPython runs the
+`finally` inside the generator as soon as the last reference drops — but a
+retained exception traceback defers that to interpreter shutdown, when the
+exporter has already stopped. The symptom was one agent missing from each trace,
+a different one each run.
+
+### Prompt management
+
+Prompts live in [Langfuse](https://langfuse.com)'s registry, so a wording change
+is a publish with a version and an author rather than a deploy, and a trace
+records which version produced a given plan. Resolution is a chain, and every
+step may fail without consequence:
+
+| Source | When | Version in trace |
+|---|---|---|
+| `PROMPT_DIR/<name>.md` | development, if set | `file` |
+| Langfuse, `production` label | cached for `PROMPT_CACHE_TTL` | `langfuse:v7` |
+| `providers/prompt_defaults.py` | always available, ships in the image | `code` |
+
+Anything fetched is validated before use — long enough to be a real prompt, and
+with every `{{placeholder}}` filled. A truncated publish, or one referring to a
+variable this build does not supply, is discarded in favour of the shipped text
+rather than sent to the model with a hole in it. A registry that is down is
+dialled once per TTL window, not once per agent, so an outage there does not add
+its timeout to every node on the critical path.
+
+Placeholder values come from code, never from prompt text. The itinerary prompt
+states an activities-per-day range that the density scorer also enforces, so both
+read the same constants and an edit in the UI cannot make the instruction and the
+grader disagree.
+
+```bash
+make prompts-push    # seed the registry from the shipped defaults, once
+make prompts         # what each prompt currently resolves to, and from where
+```
+
 ---
 
 ## Getting started
@@ -349,11 +386,12 @@ status.py          criticality tiers
 
 agents/            one module per agent, plus the shared two-phase loop
 tools/             tool definitions, output schemas, airport data
-providers/         LLM routing, cache, checkpointing, metrics, tracing
+providers/         LLM routing, cache, checkpointing, metrics, tracing,
+                   prompt registry + the prompts of record
 evals/             golden set, scorers, runner, baseline, fixtures
 hours.py           OSM opening_hours parsing
 web/              single-page UI (no build step)
-tests/            372 tests
+tests/            512 tests
 ```
 
 ---

@@ -24,7 +24,7 @@ from collections import Counter
 from langchain_core.messages import ToolMessage
 
 from models import TripRequest, TripState
-from providers import metrics, tracing
+from providers import metrics, prompts, tracing
 from tools.schemas import summarize_exception, tool_error
 from providers.llm import (
     AGENT_PROVIDERS,
@@ -162,7 +162,7 @@ def run_agent(
     t0 = time.perf_counter()
     _trace(name, "start", t0)
     deadline = deadline_for(name)
-    span = agent_span(name, task=user[:400])
+    span = agent_span(name, task=user[:400], prompt=prompts.resolved(name))
     span.__enter__()
     try:
         result = invoke_structured(
@@ -428,7 +428,7 @@ def run_tool_agent(
     t0 = time.perf_counter()
     _trace(name, "start", t0)
     deadline = deadline_for(name)
-    span = agent_span(name, task=user[:400])
+    span = agent_span(name, task=user[:400], prompt=prompts.resolved(name))
     span.__enter__()
     try:
         messages, payloads = _gather_with_tools(
