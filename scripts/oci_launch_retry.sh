@@ -17,6 +17,29 @@
 #   ./scripts/oci_launch_retry.sh
 set -uo pipefail
 
+# A freshly uploaded API key authenticates only intermittently — measured at
+# roughly 40% success across a hundred calls, on every service, hours after
+# upload and with the clock in sync. So NotAuthenticated is treated as noise to
+# retry rather than a configuration error. It costs nothing in a loop that was
+# always going to run for hours, and the alternative is exiting on a 401 that
+# would have worked on the next attempt.
+retry() {
+  local label="$1"; shift
+  local tries=0
+  while [[ $tries -lt 30 ]]; do
+    if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
+    if ! printf '%s' "$out" | grep -qE 'NotAuthenticated|TooManyRequests|InternalError|502|503|504'; then
+      echo "$label failed:" >&2
+      printf '%s\n' "$out" | tail -15 >&2
+      return 1
+    fi
+    tries=$((tries + 1))
+    sleep 3
+  done
+  echo "$label: gave up after 30 transient failures" >&2
+  return 1
+}
+
 cd "$(dirname "$0")/.."
 CONFIG="scripts/oci-launch.env"
 [[ -f "$CONFIG" ]] || { echo "missing $CONFIG — copy the .example and fill it in"; exit 1; }
@@ -35,13 +58,18 @@ INTERVAL="${INTERVAL:-60}"
 [[ -f "$SSH_KEY" ]] || { echo "no public key at $SSH_KEY"; exit 1; }
 
 echo "resolving the newest Ubuntu 24.04 image for A1…"
-IMAGE_ID=$(oci compute image list \
+IMAGE_ID=$(retry "image lookup" oci compute image list \
   --compartment-id "$COMPARTMENT_ID" \
   --operating-system "Canonical Ubuntu" \
   --operating-system-version "24.04" \
   --shape VM.Standard.A1.Flex \
   --sort-by TIMECREATED --sort-order DESC --limit 1 \
   --query 'data[0].id' --raw-output) || exit 1
+# The CLI prints a pagination WARNING on stdout, and `retry` folds stderr in
+# too, so the captured value is not just the id. Pull the OCID out rather than
+# trusting the whole blob — passing the warning text as --image-id fails with an
+# error that says nothing about why.
+IMAGE_ID=$(printf '%s' "$IMAGE_ID" | grep -oE 'ocid1\.image\.[a-z0-9._-]+' | head -1)
 [[ -n "$IMAGE_ID" ]] || { echo "no matching image found"; exit 1; }
 
 # Not `mapfile`: macOS ships bash 3.2, where it does not exist. And not
@@ -49,7 +77,7 @@ IMAGE_ID=$(oci compute image list \
 ADS=()
 while IFS= read -r ad; do
   [[ -n "$ad" ]] && ADS+=("$ad")
-done < <(oci iam availability-domain list \
+done < <(retry "availability domains" oci iam availability-domain list \
   --compartment-id "$COMPARTMENT_ID" --query 'data[].name' \
   | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))')
 [[ ${#ADS[@]} -gt 0 ]] || { echo "could not list availability domains"; exit 1; }
@@ -66,7 +94,10 @@ while true; do
     attempt=$((attempt + 1))
     printf '[%s] attempt %d — %s … ' "$(date +%H:%M:%S)" "$attempt" "$ad"
 
-    out=$(oci compute instance launch \
+    # --no-retry: the CLI otherwise retries a capacity error internally with
+    # backoff, so a single attempt took minutes and this loop lost control of
+    # its own cadence. Retrying is this script's job.
+    out=$(oci --no-retry compute instance launch \
       --availability-domain "$ad" \
       --compartment-id "$COMPARTMENT_ID" \
       --subnet-id "$SUBNET_ID" \
@@ -76,8 +107,7 @@ while true; do
       --boot-volume-size-in-gbs "$BOOT_GB" \
       --assign-public-ip true \
       --ssh-authorized-keys-file "$SSH_KEY" \
-      --display-name "$NAME" \
-      --wait-for-state RUNNING 2>&1)
+      --display-name "$NAME" 2>&1)
 
     if [[ $? -eq 0 ]]; then
       echo "LAUNCHED"
@@ -96,6 +126,8 @@ while true; do
     # print it and stop rather than looping on a mistake for hours.
     if printf '%s' "$out" | grep -qiE 'out of (host )?capacity|outofcapacity'; then
       echo "no capacity"
+    elif printf '%s' "$out" | grep -qE 'NotAuthenticated|TooManyRequests|InternalError'; then
+      echo "transient auth/throttle — retrying"
     else
       echo "FAILED"
       echo
