@@ -18,7 +18,7 @@ FULL        := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml -f c
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache prompts prompts-push test deploy
+.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache prompts prompts-push prices test deploy
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -82,6 +82,16 @@ prompts: ## what each prompt resolves to, and from where
 
 prompts-push: ## seed the Langfuse prompt registry from the shipped defaults
 	$(dc) $(FULL) exec app python -m providers.prompts
+
+prices: ## regenerate providers/prices.py from LiteLLM's price map
+	@$(dc) $(LLM) exec -T litellm python -c "\
+	import json, litellm, importlib.metadata as md; \
+	print(json.dumps({'version': md.version('litellm'), 'rates': { \
+	  m: [i.get('input_cost_per_token') or 0.0, i.get('output_cost_per_token') or 0.0] \
+	  for m, i in litellm.model_cost.items() \
+	  if m.startswith(('groq/', 'openrouter/')) \
+	  and (i.get('input_cost_per_token') or i.get('output_cost_per_token'))}}))" \
+	  | python3 "$(CURDIR)/scripts/refresh_prices.py"
 
 test: ## run the test suite inside the app container
 	$(dc) $(DATA) exec app python -m pytest -q

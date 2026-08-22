@@ -165,6 +165,12 @@ def get_llm(
         api_key=key,
         base_url=base_url,
         temperature=temperature,
+        # Ask for the response headers when proxied. The body reports
+        # `model: planner` — the routing alias, which has no price — while the
+        # headers carry both the deployment that actually served the call and
+        # the dollar cost LiteLLM computed for it. Without them the app can
+        # only guess at what a run cost.
+        include_response_headers=proxied,
         # a socket-level cap: without it a stalled response blocks the node past
         # its deadline, and a cooperative check between rounds never gets to run
         timeout=timeout,

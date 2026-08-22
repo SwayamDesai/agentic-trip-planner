@@ -42,6 +42,15 @@ function node(tag, cls, text) {
   return n;
 }
 
+/* Cents matter here — a run costs fractions of one, so `money()` rounding to
+   the nearest dollar would render every plan as "$0". */
+function dollars(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  if (n === 0) return "$0.00";
+  return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+}
+
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
   return "$" + Math.round(Number(value)).toLocaleString("en-US");
@@ -481,6 +490,55 @@ function renderCost(data, target) {
   target.appendChild(c);
 }
 
+/* What the plan cost to PRODUCE, as opposed to what the trip costs.
+   Kept in its own card, and labelled "at list price", because these are two
+   dollar figures on one screen and confusing them would be easy: the trip
+   total is real money a traveller would spend, this one is what the inference
+   would have cost on a paid account. Every model here is on a free tier, so the
+   actual invoice is zero — which is precisely why the list-price figure is the
+   informative one. */
+function renderRunCost(metrics, target) {
+  const t = metrics?.totals;
+  if (!t) return;
+
+  const { card: c, body } = card("What this plan cost to produce", null,
+    "model spend, at list price");
+  const table = node("div", "cost");
+
+  const rows = [
+    ["Inference", `${t.llm_calls} model call${t.llm_calls === 1 ? "" : "s"}`,
+     dollars(t.cost_usd)],
+    ["Tokens", "prompt + completion", (t.total_tokens || 0).toLocaleString("en-US")],
+    ["Wall clock", "fan-out, so less than the sum of the agents",
+     `${t.wall_seconds}s`],
+  ];
+  for (const [label, hint, value] of rows) {
+    const row = node("div", "cost__row");
+    const left = node("div", "cost__label", label);
+    left.appendChild(node("span", "cost__hint", hint));
+    row.append(left, node("div", "cost__value", value));
+    table.appendChild(row);
+  }
+  body.appendChild(table);
+
+  /* An unpriced call means the total is understated. Saying so is the whole
+     point: a cost figure that quietly omits calls is worse than none. */
+  if (t.unpriced_calls) {
+    body.appendChild(node("div", "advice",
+      `${t.unpriced_calls} call${t.unpriced_calls === 1 ? "" : "s"} had no known ` +
+      `price, so this figure is a floor.`));
+  }
+
+  const filtered = metrics.filtered && Object.keys(metrics.filtered);
+  if (filtered?.length) {
+    body.appendChild(node("div", "advice",
+      `Instruction-like text was found in data from ${filtered.join(", ")} and ` +
+      `neutralised before the model saw it.`));
+  }
+
+  target.appendChild(c);
+}
+
 function renderNotice(payload) {
   const box = el("notice");
   if (payload.status === "ok") { box.hidden = true; return; }
@@ -513,6 +571,7 @@ function renderPlan(payload) {
   renderWeather(payload.weather, target);
   renderItinerary(payload.itinerary, target);
   renderCost(payload.budget, target);
+  renderRunCost(payload.metrics, target);
 
   if (payload.warnings?.length) {
     const box = node("details", "flags");

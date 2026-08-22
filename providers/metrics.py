@@ -33,6 +33,8 @@ from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from providers import pricing
+
 
 @dataclass
 class AgentMetrics:
@@ -43,6 +45,11 @@ class AgentMetrics:
     retries: int = 0
     seconds: float = 0.0
     outcome: str = "pending"  # done | skipped | failed | timeout
+    # List-price cost of this agent's calls, and how many could not be priced.
+    # Counted separately because a run with an unpriced model has an
+    # understated cost, and a total that hides that is worse than no total.
+    cost_usd: float = 0.0
+    unpriced_calls: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -62,6 +69,8 @@ class RunMetrics:
     def totals(self) -> dict:
         return {
             "llm_calls": sum(a.llm_calls for a in self.agents.values()),
+            "cost_usd": round(sum(a.cost_usd for a in self.agents.values()), 6),
+            "unpriced_calls": sum(a.unpriced_calls for a in self.agents.values()),
             "prompt_tokens": sum(a.prompt_tokens for a in self.agents.values()),
             "completion_tokens": sum(a.completion_tokens for a in self.agents.values()),
             "total_tokens": sum(a.total_tokens for a in self.agents.values()),
@@ -86,6 +95,8 @@ class RunMetrics:
                     "total_tokens": m.total_tokens,
                     "tool_calls": m.tool_calls,
                     "retries": m.retries,
+                    "cost_usd": round(m.cost_usd, 6),
+                    "unpriced_calls": m.unpriced_calls,
                     "seconds": round(m.seconds, 2),
                     "outcome": m.outcome,
                 }
@@ -139,15 +150,37 @@ def get(run_id: str) -> Optional[RunMetrics]:
         return _RUNS.get(run_id)
 
 
-def record_llm(agent: str, prompt_tokens: int, completion_tokens: int) -> None:
+def record_llm(
+    agent: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    model: Optional[str] = None,
+    reported_cost: Optional[float] = None,
+) -> None:
+    """Record one call's tokens and its cost.
+
+    `reported_cost` is what the proxy computed for this exact call and wins when
+    present. Otherwise the local table prices `model` — which must be the model
+    the PROVIDER reported, not the one requested: the app asks for an alias and
+    the proxy picks a deployment, so only the response knows what to price.
+    """
     run = _collector()
     if run is None:
         return          # untracked context (a test, a script): drop silently
+    spend = (
+        reported_cost
+        if reported_cost is not None
+        else pricing.cost(model, prompt_tokens, completion_tokens)
+    )
     with _LOCK:
         m = run.agents[agent]
         m.llm_calls += 1
         m.prompt_tokens += prompt_tokens
         m.completion_tokens += completion_tokens
+        if spend is None:
+            m.unpriced_calls += 1
+        else:
+            m.cost_usd += spend
 
 
 def record_tool(agent: str) -> None:
@@ -203,6 +236,64 @@ def active_runs() -> int:
         return len(_RUNS)
 
 
+def _headers_of(response: Any) -> dict:  # noqa: ANN401
+    """Response headers, lowercased, when the client was asked to keep them."""
+    for batch in getattr(response, "generations", None) or []:
+        for gen in batch:
+            meta = (
+                getattr(getattr(gen, "message", None), "response_metadata", None) or {}
+            )
+            headers = meta.get("headers")
+            if headers:
+                return {str(k).lower(): v for k, v in dict(headers).items()}
+    return {}
+
+
+def _model_of(response: Any) -> Optional[str]:  # noqa: ANN401
+    """The model that actually answered, in whichever field carried it.
+
+    Through the proxy the body says `planner` — the routing alias, which is not
+    a model and has no price. `x-litellm-model-name` is the deployment that
+    served the call, so it is checked first; pricing the alias instead would
+    report every proxied run as unpriced.
+    """
+    served = _headers_of(response).get("x-litellm-model-name")
+    if served:
+        return str(served)
+
+    output = getattr(response, "llm_output", None) or {}
+    for key in ("model", "model_name"):
+        value = output.get(key)
+        if value:
+            return str(value)
+    for batch in getattr(response, "generations", None) or []:
+        for gen in batch:
+            meta = (
+                getattr(getattr(gen, "message", None), "response_metadata", None) or {}
+            )
+            for key in ("model", "model_name"):
+                if meta.get(key):
+                    return str(meta[key])
+    return None
+
+
+def _reported_cost(response: Any) -> Optional[float]:  # noqa: ANN401
+    """The cost LiteLLM computed for this call, if it told us.
+
+    Preferred over the local table whenever present: it is the same number the
+    proxy bills against and Langfuse shows, computed on the deployment that
+    actually served the request. The table is the fallback for direct calls,
+    where there is no proxy to ask.
+    """
+    raw = _headers_of(response).get("x-litellm-response-cost")
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 class TokenCounter(BaseCallbackHandler):
     """Captures token usage for one agent's LLM calls.
 
@@ -229,4 +320,10 @@ class TokenCounter(BaseCallbackHandler):
                         prompt += meta.get("input_tokens") or 0
                         completion += meta.get("output_tokens") or 0
 
-        record_llm(self.agent, int(prompt), int(completion))
+        record_llm(
+            self.agent,
+            int(prompt),
+            int(completion),
+            _model_of(response),
+            reported_cost=_reported_cost(response),
+        )
