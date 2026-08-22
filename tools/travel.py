@@ -147,7 +147,7 @@ def _fast_flights(
                 "price_covers": "round trip" if ret else "one way",
             }
         )
-    validated, _ = validate_rows(out, FlightOffer)
+    validated, _ = validate_rows(out, FlightOffer, "flights")
     validated.sort(key=lambda r: r["price_usd"])
     return validated[:10]
 
@@ -213,7 +213,7 @@ def _serp_flights(
                     "price_covers": "round trip" if ret else "one way",
                 }
             )
-    validated, _ = validate_rows(out, FlightOffer)
+    validated, _ = validate_rows(out, FlightOffer, "flights")
     return validated[:10]
 
 
@@ -403,7 +403,7 @@ def search_hotels(
                 }
             )
 
-        out, dropped = validate_rows(rows, HotelOffer)
+        out, dropped = validate_rows(rows, HotelOffer, "hotels")
         if not out:
             return empty_result(
                 "hotels",

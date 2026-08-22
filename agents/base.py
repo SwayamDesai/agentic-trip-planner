@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage
 
 from models import TripRequest, TripState
 from providers import metrics, prompts, tracing
+from providers.safety import Fence
 from tools.schemas import summarize_exception, tool_error
 from providers.llm import (
     AGENT_PROVIDERS,
@@ -451,8 +452,20 @@ def run_tool_agent(
         # need its own intermediate reasoning turns, only the data the tools
         # returned, so phase two keeps the system prompt, the original task,
         # and a plain digest of tool output.
+        # Phase two inlines tool output into a USER message, which is where
+        # data stops being distinguishable from instructions: OSM place names
+        # and wiki summaries are world-editable, and an instruction hidden in
+        # one reads exactly like the task. So each result is fenced with a
+        # per-call nonce that injected text cannot guess, under a preamble
+        # written here in code — deliberately not in the prompt, which can be
+        # edited in the registry.
+        #
+        # Phase one keeps its results in ToolMessages, where the role itself
+        # separates them, and their contents were already scrubbed at the tool
+        # boundary.
+        fence = Fence()
         digest = "\n\n".join(
-            f"Tool result {i + 1}:\n{m.content}"
+            fence.wrap(f"tool result {i + 1}", str(m.content))
             for i, m in enumerate(m for m in messages if isinstance(m, ToolMessage))
         )
         final = [
@@ -461,7 +474,8 @@ def run_tool_agent(
                 "role": "user",
                 "content": (
                     f"{user}\n\n"
-                    f"Data retrieved from tools:\n{digest}\n\n"
+                    f"{fence.preamble()}\n\n"
+                    f"{digest}\n\n"
                     "Produce the final structured answer using only the data "
                     "above. Do not invent entries the tools did not return."
                 ),

@@ -23,6 +23,9 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from providers import metrics
+from providers.safety import NAME_LIMIT, scrub_tree
+
 # Matches the numeric part of "$148", "1,234.50", "€1 234". Thousands
 # separators are assumed to be commas or spaces: every request we make pins
 # currency=USD and gl=us, so European decimal-comma format is not expected.
@@ -115,19 +118,30 @@ class Place(_Money):
     lon: float = Field(ge=-180, le=180)
 
 
-def validate_rows(rows: list[dict], model: type[BaseModel]) -> tuple[list[dict], int]:
-    """Validate each row independently.
+def validate_rows(
+    rows: list[dict], model: type[BaseModel], source: str = "tool"
+) -> tuple[list[dict], int]:
+    """Validate each row independently, and neutralise instruction-shaped text.
 
     One malformed row must not discard the good ones — a single odd listing
     should not turn a working search into "no results". Returns the surviving
     rows and how many were dropped, so the tool can report the loss instead of
     hiding it.
+
+    Scrubbing happens HERE, on whole rows rather than named fields, because
+    this is the one place every tool's output passes through. A field added to
+    a tool next month is covered without anyone remembering to extend a list,
+    and the value that reaches state, the prompt and the rendered plan is the
+    same cleaned one.
     """
     kept: list[dict] = []
     dropped = 0
     for row in rows:
+        clean, kinds = scrub_tree(row, limit=NAME_LIMIT)
+        if kinds:
+            metrics.record_filtered(source, kinds)
         try:
-            kept.append(model.model_validate(row).model_dump(exclude_none=True))
+            kept.append(model.model_validate(clean).model_dump(exclude_none=True))
         except ValidationError:
             dropped += 1
     return kept, dropped

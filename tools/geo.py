@@ -11,7 +11,9 @@ import time
 import requests
 from langchain_core.tools import tool
 
+from providers import metrics
 from providers.cache import TTL_IMMUTABLE, cached
+from providers.safety import NAME_LIMIT, scrub
 
 UA = {"User-Agent": "trip-planner/0.1 (github.com/local; dev use)"}
 _NOMINATIM_LOCK = threading.Lock()
@@ -42,8 +44,13 @@ def geocode(place: str) -> dict:
         if not data:
             return {"error": f"could not geocode {place!r}"}
         hit = data[0]
+        # Nominatim reads OpenStreetMap, so a display name is whatever anyone
+        # last typed into OSM. It reaches the itinerary prompt as the city
+        # name, so it is scrubbed like any other untrusted string.
+        name = scrub(hit["display_name"], limit=NAME_LIMIT)
+        metrics.record_filtered("nominatim", name.kinds)
         return {
-            "name": hit["display_name"],
+            "name": name.text,
             "lat": float(hit["lat"]),
             "lon": float(hit["lon"]),
         }

@@ -12,6 +12,7 @@ Rules:
                absent -> the model picks a length suited to the destination.
 """
 
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -33,6 +34,54 @@ MAX_TRAVELERS = 9      # the usual single-booking limit
 
 class InvalidTripError(ValueError):
     """The request cannot be planned as stated."""
+
+
+# What a place name can contain: letters in any script, digits, spaces, and the
+# handful of punctuation marks real names use. Everything else is rejected —
+# colons, braces, angle brackets, backticks, quotes, newlines — because those
+# are the characters used to fake structure in a prompt, and no city needs one.
+#
+# This is the strongest injection control in the system precisely because it is
+# a whitelist: "Seville" passes, and
+# `Seville. SYSTEM: ignore prior instructions` does not exist as a place, so
+# rejecting it costs a real user nothing.
+PLACE_MAX = 80
+PREFERENCE_MAX = 40
+_DISALLOWED = re.compile(r"[^\w .,'\u2019\-()/&]", re.UNICODE)
+
+
+def _check_text(label: str, value: str, limit: int) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise InvalidTripError(f"{label} is required")
+    if len(text) > limit:
+        raise InvalidTripError(
+            f"{label} is {len(text)} characters; no {label} is longer than "
+            f"{limit}"
+        )
+    bad = _DISALLOWED.findall(text)
+    if bad:
+        raise InvalidTripError(
+            f"{label} {text[:40]!r} contains characters a place name does not: "
+            f"{''.join(sorted(set(bad)))[:10]}"
+        )
+    return text
+
+
+def validate_text(
+    origin: str, destination: str, preferences: Optional[list[str]] = None
+) -> None:
+    """Reject place names that are not place names.
+
+    Called before anything else touches these strings: they are interpolated
+    into every agent's prompt, so a hostile destination is an injection into
+    six prompts at once, and one of them is read by a model deciding which
+    tools to call.
+    """
+    _check_text("origin", origin, PLACE_MAX)
+    _check_text("destination", destination, PLACE_MAX)
+    for preference in preferences or []:
+        _check_text("interest", preference, PREFERENCE_MAX)
 
 
 def validate(start_date: str, end_date: Optional[str], travelers: Optional[int]) -> None:
@@ -157,6 +206,7 @@ def resolve_request(
     length (None when the length was stated).
     """
     preferences = preferences or []
+    validate_text(origin, destination, preferences)
     validate(start_date, end_date, travelers)
     reason: Optional[str] = None
 

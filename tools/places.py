@@ -18,6 +18,12 @@ import requests
 from langchain_core.tools import tool
 
 from providers.cache import TTL_STATIC, cached
+from providers import metrics
+from providers.safety import NAME_LIMIT, scrub
+
+# A real city summary is a couple of paragraphs; the API is asked for an
+# extract, so anything longer is padding meant to bury the actual task.
+GUIDE_LIMIT = 1500
 from tools.schemas import Place, empty_result, validate_rows
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -153,7 +159,7 @@ def find_places(
                     "lon": round(centre["lon"], 5),
                 }
             )
-        validated, dropped = validate_rows(out, Place)
+        validated, dropped = validate_rows(out, Place, "openstreetmap")
         if not validated:
             return empty_result(
                 f"{category} places",
@@ -210,6 +216,11 @@ def city_guide(city: str) -> dict:
         extract = (page.get("extract") or "").strip()
         if not extract:
             return {"error": f"no Wikivoyage entry for {city!r}"}
-        return {"city": page.get("title", city), "summary": extract[:1500]}
+        # Wikivoyage is world-editable prose pasted straight into a prompt,
+        # so it is the single most attractive injection vector in the system.
+        summary = scrub(extract, limit=GUIDE_LIMIT)
+        title = scrub(page.get("title", city), limit=NAME_LIMIT)
+        metrics.record_filtered("wikivoyage", summary.kinds + title.kinds)
+        return {"city": title.text, "summary": summary.text}
 
     return cached("cityguide", city.lower().strip(), fetch, ttl=TTL_STATIC)

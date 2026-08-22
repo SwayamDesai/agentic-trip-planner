@@ -26,6 +26,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from tools.geo import geocode
+from providers.safety import NAME_LIMIT, scrub
 from tools.schemas import tool_error
 
 # A code may legitimately sit well outside its city: Frankfurt-Hahn is ~110km
@@ -131,7 +132,10 @@ def find_airports(city: str) -> dict:
             f"{city!r}. It may need to be reached via a larger nearby city.",
             "no_results",
         )
-    return {"city": location["name"], "airports": airports}
+    # `airports` comes from the bundled table, but the city name came from
+    # Nominatim, i.e. from OpenStreetMap.
+    return {"city": scrub(location["name"], limit=NAME_LIMIT).text,
+            "airports": airports}
 
 
 def validate_route(

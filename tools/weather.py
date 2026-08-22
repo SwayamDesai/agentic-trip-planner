@@ -104,7 +104,7 @@ def _try_forecast(lat: float, lon: float, start: str, end: str) -> dict | None:
             daily.get("precipitation_probability_max") or [None] * len(daily["time"]),
         )
     ]
-    validated, dropped = validate_rows(days, DayWeather)
+    validated, dropped = validate_rows(days, DayWeather, "weather")
     if not validated:
         return None  # nothing usable; caller falls back to normals
     return {
@@ -171,7 +171,7 @@ def _normals(lat: float, lon: float, start: str, end: str) -> dict:
             }
         )
 
-    days, dropped = validate_rows(days, DayWeather)
+    days, dropped = validate_rows(days, DayWeather, "weather")
     return {
         "source": "climate_normals",
         "note": (

@@ -54,6 +54,10 @@ class RunMetrics:
     started_at: float = field(default_factory=time.perf_counter)
     agents: dict[str, AgentMetrics] = field(default_factory=lambda: defaultdict(AgentMetrics))
     wall_seconds: float = 0.0
+    # Instruction-shaped text neutralised in tool output: source -> what kinds.
+    # Counted per run because a filtered span is evidence of an attempted
+    # injection, and an attack that leaves no trace is one nobody investigates.
+    filtered: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def totals(self) -> dict:
         return {
@@ -66,9 +70,14 @@ class RunMetrics:
             "wall_seconds": round(self.wall_seconds, 2),
         }
 
+    def filtered_kinds(self) -> list[str]:
+        """Every kind of injection neutralised this run, deduplicated."""
+        return sorted({kind for kinds in self.filtered.values() for kind in kinds})
+
     def as_dict(self) -> dict:
         return {
             "totals": self.totals(),
+            "filtered": self.filtered,
             "agents": {
                 name: {
                     "llm_calls": m.llm_calls,
@@ -146,6 +155,17 @@ def record_tool(agent: str) -> None:
     if run is not None:
         with _LOCK:
             run.agents[agent].tool_calls += 1
+
+
+def record_filtered(source: str, kinds) -> None:
+    """Note that untrusted text from `source` had spans neutralised."""
+    run = _collector()
+    if run is None or not kinds:
+        return
+    with _LOCK:
+        counts = run.filtered.setdefault(source, {})
+        for kind in kinds:
+            counts[kind] = counts.get(kind, 0) + 1
 
 
 def record_retry(agent: str) -> None:

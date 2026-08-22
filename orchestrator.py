@@ -28,7 +28,7 @@ from agents.itinerary_agent import itinerary_agent
 from agents.places_agent import places_agent
 from agents.weather_agent import weather_agent
 from models import TripRequest, TripState
-from providers import metrics, tracing
+from providers import metrics, safety, tracing
 from providers.cache import stats as cache_stats
 from providers.memory import get_checkpointer, thread_id
 from status import plan_status
@@ -273,4 +273,26 @@ def plan_trip(request: TripRequest, remember: bool = True) -> TripState:
     state = dict(state)
     state["metrics"] = run.as_dict() if run else None
     state["cache"] = cache_stats()
+
+    # An attempted injection is reported, not swallowed. Filtering it silently
+    # would leave a plan that looks entirely normal while the data behind it was
+    # hostile, and nobody would ever look.
+    notes = list(state.get("warnings") or [])
+    if run and run.filtered:
+        sources = ", ".join(sorted(run.filtered))
+        notes.append(
+            f"instruction-like text was found in data from {sources} and "
+            f"neutralised before the model saw it "
+            f"({', '.join(run.filtered_kinds())})"
+        )
+    if safety.leaked_markers(state.get("plan")):
+        # The model repeated the wrapper instead of reading inside it. Not an
+        # attack, but the separation is not landing, and the plan text is now
+        # carrying scaffolding a traveller should never see.
+        notes.append(
+            "the plan echoed the untrusted-data markers; treat its wording "
+            "with suspicion"
+        )
+    if notes:
+        state["warnings"] = notes
     return state
