@@ -17,7 +17,7 @@ LLM         := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data up-llm down nuke logs ps health psql redis spend test deploy
+.PHONY: help up up-data up-llm down nuke logs ps health psql redis spend cache test deploy
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +63,13 @@ spend: ## what the gateway has spent, per key
 	@curl -fsS -H "Authorization: Bearer $$(grep '^LITELLM_MASTER_KEY=' .env | cut -d= -f2)" \
 	  http://127.0.0.1:4000/spend/logs 2>/dev/null | head -c 2000 || \
 	  echo "litellm not reachable from the host (it is not published; use: make llm-exec)"
+
+cache: ## LLM response cache: entry count and a sample
+	@$(dc) $(LLM) exec redis sh -c '\
+	  echo "entries: $$(redis-cli --scan --pattern "litellm.cache*" | wc -l)"; \
+	  echo "keys without a TTL (rate-limit counters, must not be evicted):"; \
+	  redis-cli --scan --pattern "*" | head -20 | while read k; do \
+	    t=$$(redis-cli ttl "$$k"); [ "$$t" = "-1" ] && echo "  $$k"; done; true'
 
 test: ## run the test suite inside the app container
 	$(dc) $(DATA) exec app python -m pytest -q

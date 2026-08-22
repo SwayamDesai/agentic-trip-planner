@@ -141,6 +141,34 @@ docker compose exec postgres psql -U atlas -d litellm -c \
 Note that LiteLLM writes spend logs asynchronously — a row appears seconds
 after the request, not immediately.
 
+## Response cache
+
+Enabled in the LiteLLM config, backed by the same Redis. Keyed on the whole
+request — model, messages, temperature, tools — so a hit can only ever be an
+identical question. That makes it plain idempotence rather than a correctness
+tradeoff.
+
+```bash
+make cache      # entry count, and which keys have no TTL
+```
+
+Cache hits are recorded in the spend log at **$0.00**, so `sum(spend)` stays a
+true cost:
+
+```sql
+SELECT cache_hit, count(*), sum(spend) FROM "LiteLLM_SpendLogs" GROUP BY cache_hit;
+```
+
+Two things to know:
+
+* **A hit still reports token counts.** They cost nothing, but the app's own
+  `metrics` computes from tokens, so a cached run looks as expensive as a fresh
+  one in our numbers. Reading cost from LiteLLM instead is the fix, and belongs
+  with the dollar-cost work.
+* **Evals should not run against a warm cache.** `EVAL_MODE=replay` bypasses the
+  model entirely and is the reproducible path. For a live eval run, send
+  `{"cache": {"no-cache": true}}` in the request body to force a miss.
+
 ## Operating it
 
 ```bash

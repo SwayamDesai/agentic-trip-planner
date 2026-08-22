@@ -77,6 +77,35 @@ router_settings:
   redis_port: 6379
 
 litellm_settings:
+  # ── exact response cache ────────────────────────────────────────────────
+  # Keyed on the WHOLE request: model, messages, temperature, tools. So a hit
+  # can only ever be an identical question, which makes this pure idempotence
+  # rather than a correctness tradeoff — unlike semantic caching, where a near
+  # miss returns a confident answer to a different question.
+  #
+  # That property is also why the TTL can be generous. A stale entry is only
+  # returned when every input matches, and the tool data the agents retrieved is
+  # part of the prompt — so changed data means a changed key. A changed prompt
+  # invalidates for the same reason, which is what makes this safe to leave on
+  # while iterating on prompts.
+  #
+  # Where it actually pays: replanning the same trip, demoing twice, and repeated
+  # eval runs. Distinct trips share nothing, so the hit rate on real traffic is
+  # low by design — paraphrases are step 7's problem, not this one.
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    # Namespaced because this Redis also holds gateway rate-limit counters.
+    # Those carry no TTL and must not be confused with cache entries when
+    # inspecting, or evicted as if they were (hence volatile-lru).
+    namespace: litellm.cache
+    ttl: 21600          # 6 hours
+    # Only cache the completion endpoints. Embeddings will come later with
+    # semantic caching and want their own settings.
+    supported_call_types: ["acompletion", "completion"]
+
   # Providers reject unknown parameters; dropping them means one client can talk
   # to several providers without the app knowing their quirks.
   drop_params: true
