@@ -1,0 +1,41 @@
+# LLM gateway layer.
+#
+#   docker compose -f docker-compose.yml -f compose.data.yml -f compose.llm.yml up -d
+#
+# Depends on the data layer: Postgres for virtual keys and spend, Redis for the
+# router's shared state (and, in a later step, response caching).
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: atlas-litellm
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?LITELLM_SALT_KEY must be set in .env}
+      LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL:?LITELLM_DATABASE_URL must be set in .env}
+      # The provider keys the router distributes across. These are the only
+      # place they need to exist once the app talks to the proxy.
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_API_KEY_2: ${GROQ_API_KEY_2}
+      GROQ_API_KEY_3: ${GROQ_API_KEY_3}
+      STORE_MODEL_IN_DB: "True"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    # Not published to the host: only the app should reach it, and its master
+    # key is effectively root over every provider key it holds.
+    expose:
+      - "4000"
+    healthcheck:
+      # /health/liveliness answers without touching a provider. /health would
+      # call every deployment and spend tokens on every poll.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=4)\""]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

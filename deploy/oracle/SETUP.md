@@ -108,6 +108,39 @@ Visit `https://atlas-yourname.duckdns.org`.
 
 ---
 
+## Adding the LLM gateway
+
+```bash
+cd ~/atlas
+make up-data     # postgres + redis
+make up-llm      # + litellm
+```
+
+Extra `.env` entries (generate each with `openssl rand -hex 24`):
+
+```
+POSTGRES_PASSWORD=...
+LITELLM_MASTER_KEY=sk-...
+LITELLM_SALT_KEY=...
+LITELLM_DATABASE_URL=postgresql://atlas:<password>@postgres:5432/litellm
+REDIS_URL=redis://redis:6379/0
+LITELLM_BASE_URL=http://litellm:4000
+```
+
+`LITELLM_BASE_URL` is the switch. Set, and LLM traffic routes through the proxy,
+which distributes across the three Groq keys and records spend. Unset, and the
+app talks to the providers directly exactly as before.
+
+Spend, per model:
+
+```bash
+docker compose exec postgres psql -U atlas -d litellm -c \
+  'SELECT model, sum(spend), count(*) FROM "LiteLLM_SpendLogs" GROUP BY model'
+```
+
+Note that LiteLLM writes spend logs asynchronously — a row appears seconds
+after the request, not immediately.
+
 ## Operating it
 
 ```bash

@@ -39,6 +39,12 @@ load_dotenv()
 GROQ_URL = "https://api.groq.com/openai/v1"
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
+# When set, LLM traffic goes through the LiteLLM proxy, which owns key routing,
+# per-key cooldown and spend tracking. Unset (local dev, or the proxy being
+# absent) and everything below behaves exactly as it did before.
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "").strip()
+LITELLM_MODEL = os.getenv("LITELLM_MODEL", "planner")
+
 # name -> (model, base_url, env var holding the key)
 #
 # Groq's free tier caps TOKENS PER MINUTE (8000), not request count, and the
@@ -57,6 +63,8 @@ PROFILES = {
         OPENROUTER_URL,
         "OPENROUTER_API_KEY",
     ),
+    # One alias; the proxy decides which of the three Groq keys serves it.
+    "litellm": (LITELLM_MODEL, LITELLM_BASE_URL, "LITELLM_MASTER_KEY"),
 }
 
 # Each agent gets an ORDERED preference list of keys, not a single key.
@@ -93,11 +101,18 @@ AGENT_PROFILES = {
 
 
 def profiles_for(agent_name: str) -> list[str]:
-    """Ordered key preference for an agent. Accepts a bare string too."""
+    """Ordered preference for an agent, proxy first when one is configured.
+
+    The direct-to-provider profiles stay in the chain BEHIND the proxy rather
+    than being replaced by it. A gateway is one more thing that can be down, and
+    an outage there should make the planner slower and unmetered — not broken.
+    The existing rotation logic supplies the fallthrough for free.
+    """
     chain = AGENT_PROFILES.get(agent_name)
     if chain is None:
         raise ValueError(f"no profile mapped for agent {agent_name!r}")
-    return [chain] if isinstance(chain, str) else list(chain)
+    direct = [chain] if isinstance(chain, str) else list(chain)
+    return ["litellm", *direct] if LITELLM_BASE_URL else direct
 
 # Kept for the trace output in agents.base, which labels each agent's backend.
 AGENT_PROVIDERS = AGENT_PROFILES
@@ -159,7 +174,39 @@ _TOOL_FAILURE_MARKERS = (
 )
 
 # Because the fan-out fires several agents at once, they throttle each other.
-_RATE_LIMIT_MARKERS = ("429", "rate_limit", "rate-limited", "RESOURCE_EXHAUSTED")
+# Lowercase, because _should_rotate lowercases the message before comparing.
+# "RESOURCE_EXHAUSTED" spelled in caps here could never match, which a test
+# caught. "tokens per day" earns its own entry: Groq's daily-quota message
+# does not always carry a 429 in the text we see.
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate_limit",
+    "rate-limited",
+    "rate limit",
+    "resource_exhausted",
+    "tokens per day",
+)
+
+# Reasons to try the NEXT profile rather than give up. Rate limits were the
+# original case; connection failures were added when the LiteLLM proxy went in
+# front, because a proxy that is down raises a connection error and would
+# otherwise fail the agent instead of falling through to the direct keys.
+_CONNECTION_MARKERS = (
+    "connection error",
+    "connection refused",
+    "connect timeout",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "apiconnectionerror",
+    "max retries exceeded",
+)
+
+
+def _should_rotate(exc: Exception) -> bool:
+    text = str(exc).lower() + " " + type(exc).__name__.lower()
+    return any(m in text for m in _RATE_LIMIT_MARKERS) or any(
+        m in text for m in _CONNECTION_MARKERS
+    )
 
 
 def _retry_after(exc: Exception, attempt: int) -> float:
@@ -236,8 +283,14 @@ def invoke_with_retry(
                 replay.store(agent_name, key, reply)
             return reply
         except Exception as exc:  # noqa: BLE001 - inspected, then re-raised
-            if not any(m in str(exc) for m in _RATE_LIMIT_MARKERS):
+            if not _should_rotate(exc):
                 raise
+            # counted here too, not just in invoke_structured — otherwise a
+            # rotation during tool gathering is invisible in the metrics that
+            # claim to report retries
+            from providers.metrics import record_retry
+
+            record_retry(agent_name)
             last_exc = exc
             # sleep only after every key has been tried once, and never past
             # the deadline — waiting through it would be pure waste
@@ -315,7 +368,7 @@ def invoke_structured(
             last_exc = exc
             text = str(exc)
 
-            if any(m in text for m in _RATE_LIMIT_MARKERS):
+            if _should_rotate(exc):
                 from providers.metrics import record_retry
 
                 record_retry(agent_name)

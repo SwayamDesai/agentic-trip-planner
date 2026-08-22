@@ -1,0 +1,96 @@
+# LiteLLM proxy configuration.
+#
+# The three Groq keys become three DEPLOYMENTS of one model alias. The router
+# load-balances across them and cools down whichever one returns a 429, which is
+# exactly what providers/llm.py used to do by hand — except here it is
+# configuration, it tracks spend in dollars, and adding a fourth provider is a
+# few lines rather than a code change.
+#
+# What this replaces in our code: key chains, rotation on 429, Retry-After
+# parsing, per-key cooldown.
+# What it does NOT replace: per-node deadlines and the structured-output retry
+# (tool_use_failed is a model quirk, not a routing problem).
+
+model_list:
+  # ── the workhorse: one alias, three keys ────────────────────────────────
+  - model_name: planner
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+      # Groq free tier is 8,000 tokens/minute per key. Declaring it lets the
+      # router avoid a deployment it knows is saturated instead of discovering
+      # that with a 429.
+      tpm: 8000
+      rpm: 30
+    model_info:
+      id: groq-key-1
+
+  - model_name: planner
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY_2
+      tpm: 8000
+      rpm: 30
+    model_info:
+      id: groq-key-2
+
+  - model_name: planner
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY_3
+      tpm: 8000
+      rpm: 30
+    model_info:
+      id: groq-key-3
+
+  # ── a smaller alias, for cheap structured extraction ────────────────────
+  # Not used yet. Present so complexity-based routing later is a config change.
+  - model_name: planner-small
+    litellm_params:
+      model: groq/qwen/qwen3.6-27b
+      api_key: os.environ/GROQ_API_KEY
+      tpm: 8000
+      rpm: 30
+
+router_settings:
+  # Least-busy rather than round-robin: our agents fan out concurrently, so
+  # spreading by current load matters more than spreading evenly over time.
+  routing_strategy: least-busy
+
+  # Retries happen INSIDE the proxy, across deployments — one app-level call
+  # can try all three keys before it returns an error.
+  num_retries: 3
+
+  # After 2 failures a deployment is taken out of rotation for 60s. That is the
+  # per-key cooldown we hand-rolled, and it is what makes an exhausted daily
+  # quota stop being retried: waiting does not help a spent key, so the router
+  # should stop asking it.
+  allowed_fails: 2
+  cooldown_time: 60
+
+  # If every `planner` deployment is cooling down, drop to the smaller model
+  # rather than failing the request.
+  fallbacks:
+    - planner: ["planner-small"]
+
+  redis_host: redis
+  redis_port: 6379
+
+litellm_settings:
+  # Providers reject unknown parameters; dropping them means one client can talk
+  # to several providers without the app knowing their quirks.
+  drop_params: true
+  # A request that has not answered in 120s is not going to.
+  request_timeout: 120
+  # Log to stdout, so `docker compose logs litellm` shows the routing decisions.
+  set_verbose: false
+  json_logs: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Virtual keys, budgets and spend tracking live here. Without a database
+  # LiteLLM still routes, but issues no keys and records no spend.
+  database_url: os.environ/LITELLM_DATABASE_URL
+  # Health of each deployment, at /health — used by the container healthcheck.
+  background_health_checks: true
+  health_check_interval: 300

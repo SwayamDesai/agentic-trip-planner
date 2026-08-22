@@ -27,20 +27,30 @@ def test_every_agent_has_a_chain():
         assert len(llm.profiles_for(agent)) >= 2, "need somewhere to rotate to"
 
 
-def test_concurrent_agents_have_distinct_primaries():
+def _direct_chain(agent: str) -> list[str]:
+    """The chain with any proxy stripped.
+
+    With LiteLLM in front, every agent's first hop is the proxy and key
+    distribution is its job. The distinctness property below still matters, but
+    for the BYPASS path — the direct keys used when the proxy is down.
+    """
+    return [p for p in llm.profiles_for(agent) if p != "litellm"]
+
+
+def test_concurrent_agents_have_distinct_direct_primaries():
     """flight, hotels and weather run at the same time in the fan-out.
 
-    Sharing a primary key would put their tokens in one 60s window.
+    On the bypass path they talk to Groq directly, and sharing a primary key
+    would put their tokens in one 60s window.
     """
-    fanout = ["flight", "weather"]
-    primaries = [llm.profiles_for(a)[0] for a in fanout]
+    primaries = [_direct_chain(a)[0] for a in ("flight", "weather")]
     assert len(set(primaries)) == len(primaries)
 
 
-def test_itinerary_primary_is_unused_by_fanout():
+def test_itinerary_direct_primary_is_unused_by_fanout():
     """itinerary is the heaviest agent and starts the moment the join happens."""
-    fanout = {llm.profiles_for(a)[0] for a in ("flight", "hotels", "weather")}
-    assert llm.profiles_for("itinerary")[0] not in fanout
+    fanout = {_direct_chain(a)[0] for a in ("flight", "hotels", "weather")}
+    assert _direct_chain("itinerary")[0] not in fanout
 
 
 def test_unknown_agent_rejected():
@@ -217,3 +227,86 @@ def test_structured_falls_through_methods_on_tool_failure(monkeypatch):
     assert methods == ["function_calling", "function_calling", "json_schema"], (
         "retry on the same method, then switch to json_schema"
     )
+
+
+# --- LiteLLM proxy in front ------------------------------------------------
+
+
+def test_proxy_is_tried_first_when_configured(monkeypatch):
+    """The proxy owns key routing and spend tracking, so it goes first."""
+    monkeypatch.setattr(llm, "LITELLM_BASE_URL", "http://litellm:4000")
+    chain = llm.profiles_for("flight")
+    assert chain[0] == "litellm"
+
+
+def test_direct_keys_remain_behind_the_proxy(monkeypatch):
+    """A gateway is one more thing that can be down. Its outage should make the
+    planner unmetered, not broken — so the direct profiles stay in the chain."""
+    monkeypatch.setattr(llm, "LITELLM_BASE_URL", "http://litellm:4000")
+    chain = llm.profiles_for("flight")
+    assert len(chain) > 1
+    assert all(p.startswith("groq-") for p in chain[1:])
+
+
+def test_chain_is_unchanged_without_a_proxy(monkeypatch):
+    """Local dev and the pre-proxy deployment must behave exactly as before."""
+    monkeypatch.setattr(llm, "LITELLM_BASE_URL", "")
+    assert "litellm" not in llm.profiles_for("flight")
+
+
+@pytest.mark.parametrize("message", [
+    "Error code: 429 - rate_limit_exceeded",
+    "tokens per day (TPD): Limit 200000",
+    "RESOURCE_EXHAUSTED",
+])
+def test_rate_limits_rotate(message):
+    assert llm._should_rotate(Boom(message))
+
+
+@pytest.mark.parametrize("message", [
+    "APIConnectionError: Connection error.",
+    "Connection refused",
+    "Max retries exceeded with url",
+    "Name or service not known",
+])
+def test_connection_failures_rotate(message):
+    """Added when the proxy went in front: a dead proxy raises a connection
+    error, and without this the agent fails instead of using the direct keys."""
+    assert llm._should_rotate(Boom(message))
+
+
+@pytest.mark.parametrize("message", [
+    "401 Invalid API Key",
+    "400 invalid_request_error",
+    "model_not_found",
+])
+def test_permanent_failures_do_not_rotate(message):
+    """Trying the next key cannot fix a malformed request or a bad key."""
+    assert not llm._should_rotate(Boom(message))
+
+
+def test_rotation_is_counted_in_the_tool_gathering_path(monkeypatch):
+    """The metrics claim to report retries; a rotation here used to be invisible."""
+    from providers import metrics
+
+    run = metrics.new_run()
+    attempts = []
+
+    def fake_get_llm(agent, temp, attempt=0, timeout=None):
+        attempts.append(attempt)
+
+        class L:
+            def bind_tools(self, t):
+                return self
+
+            def invoke(self, m):
+                if len(attempts) == 1:
+                    raise Boom("APIConnectionError: Connection error.")
+                return "ok"
+
+        return L()
+
+    monkeypatch.setattr(llm, "get_llm", fake_get_llm)
+    assert llm.invoke_with_retry("weather", [], 0.1) == "ok"
+    recorded = metrics.finish(run).as_dict()
+    assert recorded["agents"]["weather"]["retries"] == 1

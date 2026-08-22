@@ -13,10 +13,11 @@ COMPOSE_DIR := deploy/oracle
 ENV         := --env-file "$(CURDIR)/.env"
 BASE        := -f docker-compose.yml
 DATA        := -f docker-compose.yml -f compose.data.yml
+LLM         := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data down nuke logs ps health psql redis test deploy
+.PHONY: help up up-data up-llm down nuke logs ps health psql redis spend test deploy
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -29,17 +30,21 @@ up-data: ## app + caddy + postgres + redis
 	$(dc) $(DATA) up -d --build
 	@$(MAKE) --no-print-directory health
 
+up-llm: ## + litellm gateway
+	$(dc) $(LLM) up -d --build
+	@$(MAKE) --no-print-directory health
+
 down: ## stop, keep data
-	$(dc) $(DATA) down
+	$(dc) $(LLM) down
 
 nuke: ## stop and delete all volumes
-	$(dc) $(DATA) down -v
+	$(dc) $(LLM) down -v
 
 logs: ## follow app logs
-	$(dc) $(DATA) logs -f app
+	$(dc) $(LLM) logs -f app
 
 ps: ## what is running
-	$(dc) $(DATA) ps
+	$(dc) $(LLM) ps
 
 health: ## wait for the app, then report
 	@for i in $$(seq 1 30); do \
@@ -53,6 +58,11 @@ psql: ## a psql shell
 
 redis: ## a redis shell
 	$(dc) $(DATA) exec redis redis-cli
+
+spend: ## what the gateway has spent, per key
+	@curl -fsS -H "Authorization: Bearer $$(grep '^LITELLM_MASTER_KEY=' .env | cut -d= -f2)" \
+	  http://127.0.0.1:4000/spend/logs 2>/dev/null | head -c 2000 || \
+	  echo "litellm not reachable from the host (it is not published; use: make llm-exec)"
 
 test: ## run the test suite inside the app container
 	$(dc) $(DATA) exec app python -m pytest -q
