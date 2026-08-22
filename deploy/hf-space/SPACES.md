@@ -1,6 +1,12 @@
 # Deploying to Hugging Face Spaces
 
-Free, no credit card, public URL. Uses the repository's `Dockerfile` unchanged.
+> **No longer free.** Docker Spaces now require a PRO subscription — only
+> Static Spaces are free, and a static host cannot run this. Kept because the
+> configuration is correct if you have PRO.
+>
+> **For a free always-on deployment, use [../oracle/SETUP.md](../oracle/SETUP.md).**
+
+Uses the repository's `Dockerfile` unchanged.
 
 ## Why a Space fits this project
 

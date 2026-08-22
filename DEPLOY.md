@@ -40,7 +40,13 @@ by the gateway instead, which is what the token budget wants anyway.
 
 ---
 
-## Fly.io (recommended)
+## Oracle Cloud Always Free (recommended)
+
+A real always-on VM, free permanently, with persistent disk. Step-by-step in
+[deploy/oracle/SETUP.md](deploy/oracle/SETUP.md) — including the iptables trap
+that makes an Oracle VM look unreachable even after the console firewall is open.
+
+## Fly.io
 
 Fits all four: persistent volumes on the free allowance, no request timeout,
 and one always-addressable machine.

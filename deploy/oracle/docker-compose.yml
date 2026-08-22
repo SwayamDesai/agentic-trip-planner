@@ -1,0 +1,70 @@
+# Production compose for the Oracle Always Free VM.
+#
+# Two containers: the app, and Caddy in front of it for TLS. Caddy is here
+# rather than a bare port because a portfolio link served over plain HTTP gets
+# a browser warning, and Caddy obtains and renews a Let's Encrypt certificate
+# with no configuration beyond a domain name.
+services:
+  app:
+    build:
+      # repo root, two levels up from this file — the Dockerfile lives there
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: atlas
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      # All mutable state on the mounted volume, so a redeploy does not throw
+      # away the cache (which costs metered API calls to rebuild) or the
+      # rate-limit counters (which would hand every caller a fresh quota).
+      TRIP_CACHE_DIR: /data/cache
+      TRIP_DB: /data/trips.sqlite
+      GATEWAY_DB: /data/gateway.sqlite
+      JOBS_DB: /data/jobs.sqlite
+      GATEWAY: "1"
+      # SQLite-backed, because `limits` has no file store and would reset on
+      # every restart — see gateway/limiters.py
+      GATEWAY_LIMITER: bucket
+      PORT: "8000"
+    volumes:
+      - atlas_data:/data
+    # Not published to the host: only Caddy may reach the app, so there is no
+    # way to bypass TLS by hitting the port directly.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: atlas-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      # With a domain, Caddy gets a real Let's Encrypt certificate. Without
+      # one it serves plain HTTP on :80.
+      #
+      # The fallback lives HERE, not in the Caddyfile: compose always sets the
+      # variable, so an empty value counts as "set" and Caddy's own
+      # `{$VAR:default}` never fires. An empty site address then makes Caddy
+      # read the whole block as global options and fail with
+      # "unrecognized global option: reverse_proxy".
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data          # certificates; losing these means re-issuing
+      - caddy_config:/config
+
+volumes:
+  atlas_data:
+  caddy_data:
+  caddy_config:
