@@ -24,3 +24,4 @@ htmlcov/
 .vscode/
 evals/fixtures/
 .jobs.sqlite
+scripts/oci-launch.env
