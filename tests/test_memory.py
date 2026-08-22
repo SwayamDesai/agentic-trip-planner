@@ -104,7 +104,7 @@ def test_resume_carries_prior_results_and_resets_errors(monkeypatch):
     would otherwise still be reported as failing.
     """
     import orchestrator
-    from models import FlightResult, WeatherResult
+    from models import FlightResult
 
     prior = {
         "flight": FlightResult(options=[]),

@@ -442,7 +442,7 @@ so, so an assumed duration is never mistaken for a stated one.
 ### Tests
 
 ```bash
-.venv/bin/python -m pytest                  # 584 tests, ~5s, fully offline
+.venv/bin/python -m pytest                  # 608 tests, ~6s, fully offline
 ```
 
 The suite cannot reach the network: an autouse fixture makes
@@ -456,6 +456,7 @@ caught making 75 seconds of real LLM calls.
 
 ```
 main.py            CLI                     api.py       FastAPI + SSE
+payload.py         one plan shape, both paths
 orchestrator.py    LangGraph topology      chat.py      conversation → request
 models.py          state + schemas         scope.py     fills in what was omitted
 costs.py           cost arithmetic         verify.py    deterministic checks
@@ -469,7 +470,7 @@ evals/             golden set, scorers, runner, baseline, fixtures
 scripts/           generators run by make targets, not at runtime
 hours.py           OSM opening_hours parsing
 web/              single-page UI (no build step)
-tests/            584 tests
+tests/            608 tests
 ```
 
 ---

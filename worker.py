@@ -28,6 +28,7 @@ import time
 import agents.base as agent_base
 import jobs
 from models import TripRequest
+from payload import plan_payload
 from orchestrator import plan_trip
 
 POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", 1.0))
@@ -66,18 +67,10 @@ def _run_job(job: jobs.Job) -> None:
                                               "attempt": job.attempts})
         state = plan_trip(request, remember=payload.get("remember", True))
 
-        result = {
-            "status": state.get("status"),
-            "plan": state.get("plan"),
-            "warnings": state.get("warnings") or [],
-            "errors": state.get("errors") or [],
-            "metrics": state.get("metrics"),
-            "sections": {
-                key: (state[key].model_dump() if state.get(key) is not None else None)
-                for key in ("flight", "hotels", "weather", "itinerary", "budget")
-            },
-            "request": request.model_dump(),
-        }
+        # Same builder the synchronous endpoint uses. This used to nest the
+        # agent output under `sections` while the API returned it flat, so a
+        # browser could render one path and not the other.
+        result = plan_payload(state, request)
         jobs.complete(job.id, result)
         jobs.append_event(job.id, "finished", {"status": result["status"]})
     except Exception as exc:  # noqa: BLE001 - the queue decides whether to retry

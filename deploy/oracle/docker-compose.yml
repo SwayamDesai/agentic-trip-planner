@@ -26,6 +26,14 @@ services:
       # SQLite-backed, because `limits` has no file store and would reset on
       # every restart — see gateway/limiters.py
       GATEWAY_LIMITER: bucket
+      # Caddy is the only thing that can reach this container, so its
+      # X-Forwarded-For may be believed. Without this the app sees Caddy's
+      # address for every request, all anonymous visitors share ONE 40-credit
+      # bucket, and the deploy serves one plan a day in total.
+      #
+      # Safe only because the app port is not published: an untrusted caller
+      # cannot become the peer, so it cannot forge the header.
+      GATEWAY_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1/32"
       PORT: "8000"
     volumes:
       - atlas_data:/data

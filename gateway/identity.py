@@ -18,6 +18,7 @@ a leaked credential list.
 
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import sqlite3
@@ -137,6 +138,64 @@ def extract_key(headers) -> Optional[str]:
 def anonymous(client_ip: str) -> Principal:
     """Fallback identity, so unauthenticated traffic still has a scope."""
     return Principal(id=f"ip:{client_ip}", tier="anonymous", label=client_ip)
+
+
+# Proxies whose X-Forwarded-For may be believed. Empty by default: trusting the
+# header unconditionally lets any caller mint a fresh identity per request and
+# walk straight past the anonymous limit, which is worse than having no limit,
+# because it looks like one is enforced.
+#
+# In this deployment the app is not published to the host — only Caddy can reach
+# it — so the compose file sets this to the private ranges Docker assigns.
+def _trusted_networks() -> list:
+    raw = os.getenv("GATEWAY_TRUSTED_PROXIES", "").strip()
+    networks = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            continue        # a typo must not become "trust everything"
+    return networks
+
+
+def _is_trusted(address: str, networks: list) -> bool:
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(parsed in network for network in networks)
+
+
+def client_ip(peer: Optional[str], forwarded_for: Optional[str] = None) -> str:
+    """The caller's address, seen through however many proxies front the app.
+
+    Behind Caddy, `request.client.host` is CADDY — so every anonymous visitor
+    on the internet shared one bucket, and the whole deploy served one plan a
+    day. Reading X-Forwarded-For fixes that, but only carefully:
+
+      * the header is believed only when the immediate peer is a trusted proxy,
+        otherwise a caller supplies whatever address it likes;
+      * the chain is walked from the RIGHT, skipping trusted hops, because a
+        client can prepend entries to the left but cannot stop the proxy from
+        appending its own view of who connected.
+    """
+    if not peer:
+        return "unknown"
+    networks = _trusted_networks()
+    if not networks or not _is_trusted(peer, networks) or not forwarded_for:
+        return peer
+
+    for candidate in reversed([p.strip() for p in forwarded_for.split(",")]):
+        if candidate and not _is_trusted(candidate, networks):
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue    # garbage in the chain is ignored, not trusted
+            return candidate
+    return peer
 
 
 def verify(raw: str, expected_hash: str) -> bool:

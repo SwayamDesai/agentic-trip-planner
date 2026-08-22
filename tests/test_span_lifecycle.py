@@ -15,7 +15,7 @@ a retained traceback does.
 from contextlib import contextmanager
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from agents import base

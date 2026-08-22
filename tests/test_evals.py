@@ -1,6 +1,5 @@
 """The scorers must themselves be correct, or the eval lies."""
 
-import pytest
 
 from evals.scorers import score_plan
 from models import (

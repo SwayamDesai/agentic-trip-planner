@@ -2,7 +2,7 @@
  *
  * Two flows:
  *   chat     POST /api/chat per message until the trip is plannable
- *   plan     SSE from /api/plan, streaming agent progress then the plan
+ *   plan     POST /plans, then SSE from /plans/<id>/events until the result
  *
  * Everything the server sends is treated as text, never HTML: agent output is
  * model-generated and interpolating it as markup would be an injection route.
@@ -32,6 +32,7 @@ const suggestions = el("suggestions");
 let history = [];
 let planning = false;
 let clockTimer = null;
+let jobSource = null;
 
 /* ── helpers ─────────────────────────────────────────────────────── */
 
@@ -230,57 +231,135 @@ function updateAgent(event) {
   }
 }
 
-function startPlanning(trip) {
+/* Why a request was refused, in words rather than a status code.
+
+   The two refusals that actually happen are worth distinguishing. 422 is
+   validation, and FastAPI puts a sentence written for a person in `detail` — a
+   date in the past, a destination that is not a place name. 429 is the gateway's
+   daily budget, which exists because the models are on a free tier: showing
+   "HTTP 429" would read as broken, when the honest answer is "the demo's daily
+   allowance is spent, here is when it refills". The gateway already sends
+   Retry-After, so there is no need to guess. */
+function startFailure(response, body) {
+  if (response.status === 429) {
+    const seconds = Number(response.headers.get("Retry-After"));
+    return "This demo runs on free-tier model quota, and today's allowance is " +
+      "spent. " + (Number.isFinite(seconds) && seconds > 0
+        ? `It refills in about ${describeWait(seconds)}.`
+        : "Try again tomorrow.");
+  }
+  /* `detail` is FastAPI's field, `error` is the gateway's. */
+  const message = body?.detail || body?.error || `HTTP ${response.status}`;
+  return "Could not start planning: " + message;
+}
+
+function describeWait(seconds) {
+  if (seconds < 90) return `${Math.ceil(seconds)} seconds`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} minutes`;
+  return `${Math.round(seconds / 3600)} hours`;
+}
+
+/* Planning is a JOB, not a request.
+   The older path (GET /api/plan) ran the whole plan inside one HTTP request and
+   streamed from it. That works on localhost and is fragile everywhere else: 60
+   to 150 seconds on one connection, and a deploy, a proxy timeout or a closed
+   laptop lid destroys the work rather than the view of it. So the browser now
+   posts the job, gets a 202 and an id back in milliseconds, and watches the
+   job's event log — which is replayable, because the events are stored rather
+   than merely emitted. */
+async function startPlanning(trip) {
   planning = true;
   el("empty-state").hidden = true;
   el("notice").hidden = true;
   el("plan").replaceChildren();
-
-  const q = new URLSearchParams({
-    origin: trip.origin, destination: trip.destination, start: trip.start_date,
-  });
-  if (trip.end_date) q.set("end", trip.end_date);
-  if (trip.nights) q.set("nights", trip.nights);
-  if (trip.travelers) q.set("travelers", trip.travelers);
-  if (trip.budget_usd) q.set("budget", trip.budget_usd);
-  if (trip.preferences?.length) q.set("prefer", trip.preferences.join(","));
 
   const started = Date.now();
   clockTimer = setInterval(() => {
     el("progress-clock").textContent = ((Date.now() - started) / 1000).toFixed(1) + "s";
   }, 100);
 
-  const source = new EventSource("/api/plan?" + q.toString());
-
-  source.addEventListener("resolved", (e) => {
-    const data = JSON.parse(e.data);
-    renderSummary(data.request);
-    renderAgentRows(data.agents);
-    if (data.scope_reason) {
-      say("bot", `You didn't give a trip length, so I've used ${data.request.start_date} to ${data.request.end_date} — ${data.scope_reason}`);
+  let accepted;
+  try {
+    const response = await fetch("/plans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        origin: trip.origin,
+        destination: trip.destination,
+        start: trip.start_date,
+        end: trip.end_date || null,
+        nights: trip.nights || null,
+        travelers: trip.travelers || null,
+        budget: trip.budget_usd || null,
+        prefer: trip.preferences || [],
+      }),
+    });
+    accepted = await response.json();
+    if (!response.ok) {
+      stopPlanning();
+      say("error", startFailure(response, accepted));
+      return;
     }
+  } catch (err) {
+    stopPlanning();
+    say("error", "Could not start planning: " + err.message);
+    return;
+  }
+
+  renderSummary(accepted.request);
+  renderAgentRows(accepted.agents);
+  if (accepted.scope_reason) {
+    say("bot", `You didn't give a trip length, so I've used ${accepted.request.start_date} to ${accepted.request.end_date} — ${accepted.scope_reason}`);
+  }
+
+  watchJob(accepted.job_id, 0);
+}
+
+/* Resumable by design: every event carries an id, and reconnecting asks for
+   what came after the last one seen. A dropped connection costs the view, not
+   the run — the plan keeps going in the worker either way. */
+function watchJob(jobId, after) {
+  const source = new EventSource(`/plans/${jobId}/events?after=${after}`);
+  let lastId = after;
+  jobSource = source;
+
+  const track = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.id) lastId = data.id;
+    return data;
+  };
+
+  source.addEventListener("started", track);
+  source.addEventListener("agent", (e) => updateAgent(track(e)));
+
+  source.addEventListener("result", (e) => {
+    const data = track(e);
+    source.close();
+    stopPlanning();
+    if (data.status === "done" && data.result) renderPlan(data.result);
+    else say("error", "Planning failed: " + (data.error || data.status));
   });
 
-  source.addEventListener("agent", (e) => updateAgent(JSON.parse(e.data)));
-
-  source.addEventListener("plan", (e) => {
-    finish(source);
-    renderPlan(JSON.parse(e.data));
-  });
-
-  source.addEventListener("failed", (e) => {
-    finish(source);
-    say("error", "Planning failed: " + JSON.parse(e.data).error);
+  source.addEventListener("timeout", (e) => {
+    track(e);
+    source.close();
+    stopPlanning();
+    say("error", "The planner stopped reporting progress. The job may still finish — reload to check.");
   });
 
   source.onerror = () => {
-    if (planning) { finish(source); say("error", "Connection to the planner was lost."); }
+    if (!planning) return;
+    source.close();
+    /* The job is server-side, so a lost connection is a reconnect, not a
+       failure. Resume from the last event seen rather than replaying the run. */
+    say("bot", "Connection dropped — reconnecting to the job.");
+    setTimeout(() => { if (planning) watchJob(jobId, lastId); }, 1500);
   };
 }
 
-function finish(source) {
-  source.close();
+function stopPlanning() {
   planning = false;
+  if (jobSource) { jobSource.close(); jobSource = null; }
   clearInterval(clockTimer);
   setBusy(false, "Ready");
 }

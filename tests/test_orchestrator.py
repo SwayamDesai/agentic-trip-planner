@@ -1,6 +1,5 @@
 """Graph wiring, state merging and the synthesize renderer."""
 
-import pytest
 
 from models import (
     Activity,

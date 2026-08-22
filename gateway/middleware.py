@@ -37,7 +37,7 @@ from starlette.requests import Request
 
 from gateway import errors, state
 from gateway.buckets import Bucket
-from gateway.identity import anonymous, extract_key
+from gateway.identity import anonymous, client_ip, extract_key
 from gateway.policy import policy_for
 from gateway.state import GLOBAL_KEY
 
@@ -84,7 +84,10 @@ class GatewayMiddleware(BaseHTTPMiddleware):
             if principal is None:
                 return errors.unauthorized()
         else:
-            client = request.client.host if request.client else "unknown"
+            client = client_ip(
+                request.client.host if request.client else None,
+                request.headers.get("x-forwarded-for"),
+            )
             principal = anonymous(client)
 
         limits = principal.limits

@@ -3,7 +3,6 @@
 Each test corresponds to a rule that previously existed only in a prompt.
 """
 
-import pytest
 
 from models import (
     Activity,

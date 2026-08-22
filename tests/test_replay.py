@@ -5,7 +5,6 @@ call. A replay that quietly went live would be neither free nor reproducible,
 while appearing to be both.
 """
 
-import json
 from pathlib import Path
 
 import pytest

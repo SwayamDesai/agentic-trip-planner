@@ -1,6 +1,5 @@
 """The two-phase agent loop: tool gathering, then forced structured output."""
 
-import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 

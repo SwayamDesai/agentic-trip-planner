@@ -40,6 +40,42 @@ by the gateway instead, which is what the token budget wants anyway.
 
 ---
 
+## First boot: things to do once
+
+These are one-time, and skipping them is not fatal — the app runs without any of
+them, which is exactly why they are easy to forget.
+
+```bash
+make up-full          # or `make up-llm` on a small instance; see the sizing note
+make prompts-push     # seed the Langfuse prompt registry from the shipped text
+make prompts          # confirm: every prompt should now read `langfuse v1`
+make prices           # regenerate the price table from the proxy's own map
+make health
+```
+
+Without `prompts-push`, prompts resolve to the copies compiled into the image.
+Planning works identically — the point of the fallback chain — but nothing is
+editable from the Langfuse UI, and the plan page reports `code` instead of
+`langfuse:v1`. Run `make prompts` once to see which you are on.
+
+### Sizing
+
+The full stack includes self-hosted Langfuse, which brings ClickHouse, MinIO and
+a second Postgres database. That needs the ARM shape (4 OCPU / 24 GB). On the
+x86 micro shape (1 OCPU / 1 GB) ClickHouse alone will evict the app: run
+`make up-llm` and point `LANGFUSE_HOST` at Langfuse Cloud instead, which has a
+free tier.
+
+### The daily allowance
+
+The gateway grants 600 credits a day and a plan costs 40, so the deploy serves
+about 15 plans a day. That is deliberate — it is roughly what the free Groq
+quota (200k tokens per key per day) sustains, and it stops one visitor from
+spending the week's allowance in an afternoon. A refused request answers 429
+with `Retry-After`, and the page turns that into "today's allowance is spent, it
+refills in about N hours" rather than an error code. Raise it in
+`gateway/state.py` (`GLOBAL_DAILY_CREDITS`) if the model quota behind it grows.
+
 ## Oracle Cloud Always Free (recommended)
 
 A real always-on VM, free permanently, with persistent disk. Step-by-step in

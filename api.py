@@ -33,8 +33,8 @@ from pydantic import BaseModel
 import agents.base as agent_base
 import jobs
 from chat import extract, is_ready, missing_fields
-from models import TripRequest
 from orchestrator import plan_trip
+from payload import plan_payload
 from scope import InvalidTripError, resolve_request
 from status import OPTIONAL, REQUIRED
 
@@ -106,32 +106,6 @@ def chat(request: ChatRequest) -> dict:
 
 def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
-
-
-def _plan_payload(state: dict, request: TripRequest) -> dict:
-    """Flatten graph state into something the browser can render directly."""
-
-    def dump(key):
-        value = state.get(key)
-        return value.model_dump() if value is not None else None
-
-    return {
-        "request": request.model_dump(),
-        "status": state.get("status"),
-        "flight": dump("flight"),
-        "hotels": dump("hotels"),
-        "weather": dump("weather"),
-        "itinerary": dump("itinerary"),
-        "budget": dump("budget"),
-        "warnings": state.get("warnings") or [],
-        "errors": state.get("errors") or [],
-        "markdown": state.get("plan"),
-        "metrics": state.get("metrics"),
-        "cache": state.get("cache"),
-        "required": list(REQUIRED),
-        "optional": list(OPTIONAL),
-    }
-
 
 @app.get("/api/plan")
 async def plan(
@@ -213,7 +187,7 @@ async def plan(
         if "error" in done:
             yield _sse("failed", {"error": done["error"]})
         else:
-            yield _sse("plan", _plan_payload(done["state"], request))
+            yield _sse("plan", plan_payload(done["state"], request))
 
     return StreamingResponse(
         stream(),
@@ -274,6 +248,9 @@ def create_plan(body: PlanRequest) -> dict:
         "status": jobs.QUEUED,
         "request": request.model_dump(),
         "scope_reason": scope_reason,
+        # which agents to expect, in order. Server-owned because criticality
+        # lives in status.py: a browser guessing at it would drift.
+        "agents": list(REQUIRED) + list(OPTIONAL),
         "poll": f"/plans/{job_id}",
         "events": f"/plans/{job_id}/events",
     }
