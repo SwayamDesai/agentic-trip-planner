@@ -442,7 +442,7 @@ so, so an assumed duration is never mistaken for a stated one.
 ### Tests
 
 ```bash
-.venv/bin/python -m pytest                  # 372 tests, ~4s, fully offline
+.venv/bin/python -m pytest                  # 584 tests, ~5s, fully offline
 ```
 
 The suite cannot reach the network: an autouse fixture makes
