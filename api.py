@@ -348,13 +348,52 @@ def health() -> dict:
             if os.getenv(key_name)
         }
     )
+    # Optional dependencies are REPORTED but do not affect status: nothing
+    # requires them yet, and a health check that fails on an unused service
+    # would make adding one a liability.
+    dependencies = {
+        name: _reachable(url)
+        for name, url in (
+            ("postgres", os.getenv("DATABASE_URL")),
+            ("redis", os.getenv("REDIS_URL")),
+            ("litellm", os.getenv("LITELLM_BASE_URL")),
+        )
+        if url
+    }
+
     return {
         "status": "ok" if configured else "degraded",
         "llm_keys_configured": len(configured),
+        "dependencies": dependencies or "none configured",
         "detail": (
             "ready" if configured else "no model provider key is set; planning will fail"
         ),
     }
+
+
+def _reachable(url: str) -> str:
+    """TCP-connect to a dependency's host:port.
+
+    A connect is enough to answer "is it there", and it costs nothing — no
+    driver, no query, no credentials. A health probe that opens a database
+    session on every poll is a health probe that exhausts the pool.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host, port = parsed.hostname, parsed.port
+    if not host:
+        return "unparseable"
+    if port is None:
+        port = {"postgresql": 5432, "redis": 6379, "http": 80, "https": 443}.get(
+            parsed.scheme, 0
+        )
+    try:
+        with socket.create_connection((host, port), timeout=1.5):
+            return "reachable"
+    except OSError:
+        return "unreachable"
 
 
 @app.get("/")
