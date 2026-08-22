@@ -24,6 +24,10 @@ services:
       GROQ_API_KEY_2: ${GROQ_API_KEY_2}
       GROQ_API_KEY_3: ${GROQ_API_KEY_3}
       STORE_MODEL_IN_DB: "True"
+      # Unset in a deployment without Langfuse; the callback then no-ops.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro

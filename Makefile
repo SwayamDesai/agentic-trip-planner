@@ -14,10 +14,11 @@ ENV         := --env-file "$(CURDIR)/.env"
 BASE        := -f docker-compose.yml
 DATA        := -f docker-compose.yml -f compose.data.yml
 LLM         := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml
+FULL        := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml -f compose.langfuse.yml
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data up-llm down nuke logs ps health psql redis spend cache test deploy
+.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache test deploy
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -34,17 +35,22 @@ up-llm: ## + litellm gateway
 	$(dc) $(LLM) up -d --build
 	@$(MAKE) --no-print-directory health
 
+up-full: ## + self-hosted langfuse (heavy; cloud is lighter)
+	$(dc) $(FULL) up -d --build
+	@$(MAKE) --no-print-directory health
+	@echo "langfuse UI: http://localhost:3000"
+
 down: ## stop, keep data
-	$(dc) $(LLM) down
+	$(dc) $(FULL) down
 
 nuke: ## stop and delete all volumes
-	$(dc) $(LLM) down -v
+	$(dc) $(FULL) down -v
 
 logs: ## follow app logs
-	$(dc) $(LLM) logs -f app
+	$(dc) $(FULL) logs -f app
 
 ps: ## what is running
-	$(dc) $(LLM) ps
+	$(dc) $(FULL) ps
 
 health: ## wait for the app, then report
 	@for i in $$(seq 1 30); do \

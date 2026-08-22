@@ -14,6 +14,28 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+@pytest.fixture(autouse=True, scope="session")
+def no_tracing():
+    """Force Langfuse off for the whole test session.
+
+    Not covered by `no_network`: the Langfuse SDK exports over OpenTelemetry,
+    which uses its own HTTP transport and so slips past a patched
+    requests.Session. With .env pointing LANGFUSE_HOST at a container hostname,
+    the suite spent seconds per test retrying DNS for `langfuse-web` and
+    printing export failures.
+
+    Disabled at the source — an unset public key means `enabled()` is False and
+    every tracing call is already a no-op.
+    """
+    from providers import tracing
+
+    tracing._PUBLIC = None
+    tracing._SECRET = None
+    tracing._client = None
+    tracing._initialised = True      # skip the lazy build entirely
+    yield
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     """Make real network access impossible.

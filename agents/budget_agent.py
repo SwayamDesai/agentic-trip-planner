@@ -21,7 +21,7 @@ from models import (
     CostBreakdown,
     TripState,
 )
-from providers import metrics
+from providers import metrics, tracing
 from providers.llm import DeadlineExceeded, invoke_structured
 
 import time
@@ -143,12 +143,15 @@ def budget_agent(state: TripState) -> TripState:
     """
     bind(state)
     t0 = time.perf_counter()
+    span = tracing.trace_agent("budget")
+    span.__enter__()
     breakdown = compute_breakdown(state)
 
     prior = state.get("budget")
     if prior is not None and prior.advice is not None and prior.breakdown == breakdown:
         _trace("budget", "skip (breakdown unchanged)", time.perf_counter())
         metrics.record_outcome("budget", "skipped", 0.0)
+        span.__exit__(None, None, None)
         return {}
 
     _trace("budget", "start", t0)
@@ -166,6 +169,8 @@ def budget_agent(state: TripState) -> TripState:
         )
         _trace("budget", "done", t0)
         metrics.record_outcome("budget", "done", time.perf_counter() - t0)
+        span.__exit__(None, None, None)
+        tracing.flush()
         update = {"budget": BudgetResult(breakdown=breakdown, advice=advice)}
         checks = verify_breakdown_arithmetic(breakdown) + verify_budget_cap(
             breakdown, activity_allowance(state)

@@ -106,6 +106,16 @@ litellm_settings:
     # semantic caching and want their own settings.
     supported_call_types: ["acompletion", "completion"]
 
+  # ── observability ───────────────────────────────────────────────────────
+  # The proxy logs one generation per call, carrying what only it knows: which
+  # deployment served the request and what it cost. The app logs the run trace
+  # and the agent spans, and passes its trace id as request metadata — so both
+  # land in one trace instead of two disconnected views.
+  #
+  # No-ops when the Langfuse keys are unset.
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+
   # Providers reject unknown parameters; dropping them means one client can talk
   # to several providers without the app knowing their quirks.
   drop_params: true

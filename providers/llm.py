@@ -149,7 +149,16 @@ def get_llm(
     # Token counting is always on: tokens are the binding constraint, so a run
     # that cannot report its cost is not observable. Langfuse is additive and
     # contributes nothing when unconfigured.
-    handlers = [TokenCounter(agent_name), *tracing.callbacks(agent_name)]
+    proxied = profile == "litellm"
+    handlers = [TokenCounter(agent_name), *tracing.callbacks(agent_name, proxied)]
+
+    # Through the proxy, hand it our trace id so its generation — which carries
+    # the deployment and the dollar cost — is filed under the same trace as the
+    # agent span that caused the call. Calling a provider directly, there is no
+    # proxy to tell.
+    extra_body = (
+        {"metadata": tracing.request_metadata(agent_name)} if proxied else None
+    )
 
     return ChatOpenAI(
         model=model,
@@ -161,6 +170,7 @@ def get_llm(
         timeout=timeout,
         max_retries=0,  # retries are handled here, with key rotation
         callbacks=handlers,
+        extra_body=extra_body or None,
     )
 
 

@@ -21,6 +21,7 @@ import json
 import os
 import queue
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -39,7 +40,21 @@ from status import OPTIONAL, REQUIRED
 
 WEB_DIR = Path(__file__).parent / "web"
 
-app = FastAPI(title="Trip Planner")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Deliver queued traces on the way out.
+
+    A rolling deploy stops this process while spans are still batched. Without
+    this the last run of every deploy loses observations — silently, because
+    tracing is designed never to raise.
+    """
+    yield
+    from providers import tracing
+
+    tracing.shutdown()
+
+
+app = FastAPI(title="Trip Planner", lifespan=lifespan)
 
 # The gateway is opt-in: without it the planner behaves exactly as before, which
 # keeps the metering layer honestly separable from the application.

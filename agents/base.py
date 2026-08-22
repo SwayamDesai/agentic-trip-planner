@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from collections import Counter
 
 from langchain_core.messages import ToolMessage
@@ -87,6 +88,38 @@ def bind(state: TripState) -> None:
     metrics.bind_run(state)
 
 
+@contextmanager
+def agent_span(name: str, **metadata):
+    """One Langfuse span per agent, whatever shape the agent is.
+
+    Previously only `run_tool_agent` opened one, so half the agents were
+    invisible in a trace — the tool-free ones (itinerary, budget) and the ones
+    with their own node bodies (places) simply had no span, even though their
+    generations were logged. Putting it here means the span is a property of
+    being an agent rather than of using tools.
+
+    Flushed on exit: spans are created in LangGraph's worker threads, and
+    relying on a single flush at the end of the run lost some of them.
+
+    Must be closed explicitly — every caller needs a `finally`. Entering a
+    context manager and never exiting it appears to work, because CPython
+    finalises the generator when the last reference drops and that runs the
+    `finally` inside it. But an exception traceback keeps the frame alive, so
+    closure slips to interpreter shutdown, by which point the exporter has
+    stopped and the span is discarded. That is what made one agent go missing
+    from a trace at random.
+    """
+    span = tracing.trace_agent(name, **metadata)
+    span.__enter__()
+    try:
+        yield
+    finally:
+        span.__exit__(None, None, None)
+        # flushed per agent: spans are created in LangGraph worker threads, and
+        # a single flush at the end of the run dropped some of them
+        tracing.flush()
+
+
 def already_done(name: str, state: TripState) -> bool:
     """True if this agent already has a result from an earlier run.
 
@@ -129,6 +162,8 @@ def run_agent(
     t0 = time.perf_counter()
     _trace(name, "start", t0)
     deadline = deadline_for(name)
+    span = agent_span(name, task=user[:400])
+    span.__enter__()
     try:
         result = invoke_structured(
             name,
@@ -166,6 +201,8 @@ def run_agent(
         metrics.record_outcome(name, "failed", time.perf_counter() - t0)
         summary = summarize_exception(exc, name)
         return {name: None, "errors": [summary["error"]]}
+    finally:
+        span.__exit__(None, None, None)
 
 
 # A model that loops is the main way an agent burns quota without progressing.
@@ -391,7 +428,7 @@ def run_tool_agent(
     t0 = time.perf_counter()
     _trace(name, "start", t0)
     deadline = deadline_for(name)
-    span = tracing.trace_agent(name, task=user[:400])
+    span = agent_span(name, task=user[:400])
     span.__enter__()
     try:
         messages, payloads = _gather_with_tools(
@@ -464,3 +501,5 @@ def run_tool_agent(
         metrics.record_outcome(name, "failed", time.perf_counter() - t0)
         summary = summarize_exception(exc, name)
         return {name: None, "errors": [summary["error"]]}
+    finally:
+        span.__exit__(None, None, None)

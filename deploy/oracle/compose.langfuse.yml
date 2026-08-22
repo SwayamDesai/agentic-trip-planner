@@ -1,0 +1,145 @@
+# Observability layer: self-hosted Langfuse.
+#
+#   docker compose -f docker-compose.yml -f compose.data.yml \
+#                  -f compose.llm.yml -f compose.langfuse.yml up -d
+#
+# OPTIONAL, and heavier than everything else here combined: Langfuse v3 needs
+# ClickHouse for observations and S3-compatible storage for event blobs, on top
+# of the Postgres and Redis this stack already has. That is ~2GB of RAM for
+# observability alone.
+#
+# Langfuse Cloud's free tier (50k units/month, no card) gives the same features
+# — traces, prompt management, datasets — with none of this. The app cannot tell
+# the difference: only LANGFUSE_HOST changes. Self-host when you want to own the
+# data or practise running it; use cloud when you want the features.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12-alpine
+    container_name: atlas-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    expose:
+      - "8123"
+      - "9000"
+    healthcheck:
+      # 127.0.0.1, not localhost: ClickHouse listens on IPv4 only, while
+      # `localhost` resolves to ::1 inside the container — which produced a
+      # "connection refused" healthcheck against a server that was up and
+      # answering on the port the whole time.
+      test: ["CMD-SHELL", "wget --spider -q 127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: atlas-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    volumes:
+      - minio_data:/data
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  # Creates the bucket Langfuse expects, then exits. Langfuse does not create
+  # it itself and fails obscurely if it is missing.
+  minio-init:
+    image: minio/mc:latest
+    container_name: atlas-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minio} ${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/langfuse;
+      echo bucket ready"
+    restart: "no"
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: atlas-langfuse-worker
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment: &langfuse_env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set in .env}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?LANGFUSE_ENCRYPTION_KEY must be set in .env}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET must be set in .env}
+      NEXTAUTH_URL: ${LANGFUSE_URL:-http://localhost:3000}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://redis:6379/1
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      TELEMETRY_ENABLED: "false"
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: atlas-langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-worker: { condition: service_started }
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+    environment:
+      <<: *langfuse_env
+      # Auto-provision an org, project, user AND api keys on first boot, so a
+      # fresh stack is usable without clicking through the UI — and so an
+      # automated check can verify traces end to end.
+      LANGFUSE_INIT_ORG_ID: atlas
+      LANGFUSE_INIT_ORG_NAME: Atlas
+      LANGFUSE_INIT_PROJECT_ID: atlas-planner
+      LANGFUSE_INIT_PROJECT_NAME: Trip Planner
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@atlas.local}
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?LANGFUSE_INIT_USER_PASSWORD must be set in .env}
+    ports:
+      # The only new published port: the UI is the point of running this.
+      - "3000:3000"
+    healthcheck:
+      # Neither `localhost` nor 127.0.0.1 works here: the Next.js server binds
+      # to the container's own address (it honours HOSTNAME), so loopback is
+      # refused even though the service is up and answering. $$HOSTNAME
+      # resolves to that address via /etc/hosts.
+      test: ["CMD-SHELL", "wget --spider -q http://$$HOSTNAME:3000/api/public/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:

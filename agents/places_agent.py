@@ -25,7 +25,7 @@ import time
 
 from agents.base import _trace, bind, deadline_for
 from models import PlaceCandidate, PlaceSearchPlan, PlacesResult, TripState
-from providers import metrics
+from providers import metrics, tracing
 from providers.llm import invoke_structured
 from tools.geo import geocode
 from tools.places import CATEGORY_FILTERS, city_guide, find_places
@@ -138,12 +138,16 @@ def places_agent(state: TripState) -> TripState:
 
     t0 = time.perf_counter()
     _trace("places", "start", t0)
+    span = tracing.trace_agent("places", destination=state["request"].destination)
+    span.__enter__()
     req = state["request"]
 
     location = geocode(req.destination)
     if location.get("lat") is None:
         _trace("places", "FAILED geocode", t0)
         metrics.record_outcome("places", "failed", time.perf_counter() - t0)
+        span.__exit__(None, None, None)
+        tracing.flush()
         return {
             "places": None,
             "errors": [
@@ -154,9 +158,14 @@ def places_agent(state: TripState) -> TripState:
 
     # the guide is fetched first so the category decision is informed by what
     # the city is actually known for, not just its name
+    failures: list[str] = []
+
     _trace("places", "tool city_guide", time.perf_counter())
-    guide_result = city_guide.invoke({"city": req.destination})
-    guide = "" if guide_result.get("error") else guide_result.get("summary", "")
+    try:
+        guide_result = city_guide.invoke({"city": req.destination})
+        guide = "" if guide_result.get("error") else guide_result.get("summary", "")
+    except Exception:  # noqa: BLE001 - orientation text is a nicety, not a need
+        guide = ""
 
     categories, rationale = _choose_categories(
         req.destination, req.preferences, guide
@@ -164,18 +173,25 @@ def places_agent(state: TripState) -> TripState:
     _trace("places", f"categories {','.join(categories)}", time.perf_counter())
 
     candidates: list[PlaceCandidate] = []
-    failures: list[str] = []
 
     for category in categories:
         _trace("places", f"tool find_places:{category}", time.perf_counter())
-        result = find_places.invoke(
-            {
-                "lat": location["lat"],
-                "lon": location["lon"],
-                "category": category,
-                "limit": PER_CATEGORY_LIMIT,
-            }
-        )
+        # Called directly rather than through run_tool_agent, so nothing above
+        # turns a raise into an error payload. Overpass is a shared volunteer
+        # service that 429s under load; without this a rate limit there crashes
+        # the node instead of degrading the research.
+        try:
+            result = find_places.invoke(
+                {
+                    "lat": location["lat"],
+                    "lon": location["lon"],
+                    "category": category,
+                    "limit": PER_CATEGORY_LIMIT,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - one category failing is survivable
+            failures.append(f"{category}: {type(exc).__name__}")
+            continue
         if result.get("error"):
             failures.append(f"{category}: {result['error']}")
             continue
@@ -194,6 +210,8 @@ def places_agent(state: TripState) -> TripState:
     if not candidates:
         _trace("places", "FAILED no candidates", t0)
         metrics.record_outcome("places", "failed", time.perf_counter() - t0)
+        span.__exit__(None, None, None)
+        tracing.flush()
         return {
             "places": None,
             "errors": [
@@ -210,6 +228,8 @@ def places_agent(state: TripState) -> TripState:
         rationale=rationale,
     )
     metrics.record_outcome("places", "done", time.perf_counter() - t0)
+    span.__exit__(None, None, None)
+    tracing.flush()
     _trace("places", f"done ({len(candidates)} candidates)", t0)
 
     return {
