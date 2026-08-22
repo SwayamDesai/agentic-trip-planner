@@ -48,6 +48,40 @@ services:
       start_period: 30s
       retries: 3
 
+  # The half of the system that does the work. Without it the API accepts plans
+  # and nothing ever runs them: the page sits at "queued" forever, which reads
+  # as a hang. The dev compose has had a worker since the queue was introduced;
+  # this file did not, which would have shipped exactly that.
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: atlas-worker
+    restart: unless-stopped
+    command: ["python", "worker.py"]
+    env_file:
+      - ../../.env
+    environment:
+      TRIP_CACHE_DIR: /data/cache
+      TRIP_DB: /data/trips.sqlite
+      JOBS_DB: /data/jobs.sqlite
+      # No gateway here: the worker serves no HTTP, so there is nothing to meter.
+    volumes:
+      - atlas_data:/data        # same volume: the queue is a file both can see
+    # SIGTERM makes the worker finish its current job and exit, so it needs
+    # longer than one plan takes before Docker escalates to SIGKILL. Too short
+    # and a redeploy kills work mid-plan, which is the thing the queue exists to
+    # prevent.
+    stop_grace_period: 200s
+    healthcheck:
+      # Proves the worker process is alive and can reach the queue. A worker
+      # that has silently died leaves jobs queued and every other check green.
+      test: ["CMD", "python", "-c", "import jobs; jobs.stats()"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
   caddy:
     image: caddy:2-alpine
     container_name: atlas-caddy

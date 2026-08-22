@@ -156,3 +156,17 @@ def test_fresh_mode_ignores_saved_state(monkeypatch):
     assert set(used["seed"]) == {
         "run_id", "request", "errors", "warnings", "evidence",
     }
+
+
+def test_the_checkpointer_backend_is_installed_not_just_available_locally():
+    """Guards a dependency that was missing from requirements.txt.
+
+    `langgraph.checkpoint.sqlite` ships as a separate package. It was present in
+    the development virtualenv and absent from requirements, so every test here
+    passed while the container could not resume a plan at all — the worker runs
+    with checkpointing on and died with ModuleNotFoundError. Importing it
+    explicitly is what turns "works on my machine" into a failing test.
+    """
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    assert callable(getattr(SqliteSaver, "from_conn_string", None))

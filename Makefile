@@ -18,7 +18,7 @@ FULL        := -f docker-compose.yml -f compose.data.yml -f compose.llm.yml -f c
 
 dc = cd "$(COMPOSE_DIR)" && docker compose $(ENV)
 
-.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache prompts prompts-push prices test deploy
+.PHONY: help up up-data up-llm up-full down nuke logs ps health psql redis spend cache prompts prompts-push prices check-env test deploy deploy-llm
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -83,6 +83,9 @@ prompts: ## what each prompt resolves to, and from where
 prompts-push: ## seed the Langfuse prompt registry from the shipped defaults
 	$(dc) $(FULL) exec app python -m providers.prompts
 
+check-env: ## which mandatory settings are still missing from .env
+	@python3 "$(CURDIR)/scripts/check_env.py"
+
 prices: ## regenerate providers/prices.py from LiteLLM's price map
 	@$(dc) $(LLM) exec -T litellm python -c "\
 	import json, litellm, importlib.metadata as md; \
@@ -96,7 +99,13 @@ prices: ## regenerate providers/prices.py from LiteLLM's price map
 test: ## run the test suite inside the app container
 	$(dc) $(DATA) exec app python -m pytest -q
 
-deploy: ## pull, rebuild, restart, verify
+deploy: ## pull, rebuild, restart, verify (full stack)
 	git pull --ff-only
-	$(dc) $(DATA) up -d --build
+	$(dc) $(FULL) up -d --build
+	@$(MAKE) --no-print-directory health
+	@echo "reminder: run 'make prompts' to confirm the registry is still serving"
+
+deploy-llm: ## same, for an instance too small for self-hosted Langfuse
+	git pull --ff-only
+	$(dc) $(LLM) up -d --build
 	@$(MAKE) --no-print-directory health

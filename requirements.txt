@@ -6,6 +6,13 @@ airportsdata>=20241001
 
 # graph orchestration
 langgraph>=0.2.0
+# The SQLite checkpointer ships separately from langgraph. It was installed in
+# the development virtualenv and absent from this file, so every local test
+# passed and the container could not resume a plan: the worker runs with
+# checkpointing ON, and died with ModuleNotFoundError three times before the job
+# went dead. Nothing in the app imports it at start-up, which is why the
+# container looked healthy.
+langgraph-checkpoint-sqlite>=2.0
 langchain-core>=0.3.0
 
 # llm providers (both speak the OpenAI wire format)
