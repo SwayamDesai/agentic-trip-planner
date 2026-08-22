@@ -66,7 +66,11 @@ def test_every_default_renders_and_is_substantial():
 def test_every_prompt_the_code_asks_for_has_a_default():
     """A `prompts.get("x")` with no default would raise at runtime, in a node."""
     asked = set()
-    for path in list((ROOT / "agents").glob("*.py")) + [ROOT / "chat.py"]:
+    # every module, not just agents/: scope.py asks for one too, and scanning
+    # only the obvious directories is how it was missed in the first place
+    for path in ROOT.glob("**/*.py"):
+        if ".venv" in path.parts or path.parts[-2:-1] == ("tests",):
+            continue
         asked |= set(re.findall(r'prompts\.get\(\s*"(\w+)"', path.read_text()))
     assert asked, "no prompt lookups found — did the call sites move?"
     assert asked <= set(DEFAULTS), f"no default for {asked - set(DEFAULTS)}"

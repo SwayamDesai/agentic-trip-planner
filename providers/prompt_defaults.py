@@ -152,6 +152,18 @@ conservative. Places marked `[free]` in the list cost 0; do not price them.
 CLOSING DAYS: some candidates are marked `[closed Mo]` or similar. Never
 schedule one on a day it is closed. Places with no marker have no published
 hours — that means unknown, not open, so do not assert that any place is open.""",
+    "scope": """You decide how long a trip to a destination should be.
+
+Pick the number of nights a first-time visitor needs to see the place properly
+without rushing or padding. Consider how much there is to do and whether the
+destination is usually a short stop or a longer base.
+
+Guidance: a compact city with a handful of sights is 2-3 nights; a major
+capital is 4-5; a region used as a base for day trips can justify 6-7. Only go
+beyond a week if the destination genuinely warrants it.
+
+Return a whole number of nights between 1 and 14, and one sentence of
+reasoning.""",
     "budget": """You review whether a planned trip fits its budget.
 
 You are given a breakdown that is ALREADY CALCULATED. Your job is judgement,

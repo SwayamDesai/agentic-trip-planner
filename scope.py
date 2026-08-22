@@ -17,6 +17,7 @@ from typing import Optional
 
 from models import TripRequest, TripScope
 from agents.base import deadline_for
+from providers import prompts
 from providers.cache import TTL_ADVISORY, cached
 from providers.llm import invoke_structured
 
@@ -82,19 +83,6 @@ def validate(start_date: str, end_date: Optional[str], travelers: Optional[int])
             f"1 to {MAX_TRAVELERS}"
         )
 
-SYSTEM = """You decide how long a trip to a destination should be.
-
-Pick the number of nights a first-time visitor needs to see the place properly
-without rushing or padding. Consider how much there is to do and whether the
-destination is usually a short stop or a longer base.
-
-Guidance: a compact city with a handful of sights is 2-3 nights; a major
-capital is 4-5; a region used as a base for day trips can justify 6-7. Only go
-beyond a week if the destination genuinely warrants it.
-
-Return a whole number of nights between 1 and 14, and one sentence of
-reasoning."""
-
 
 def _recommend_nights(destination: str, preferences: list[str]) -> tuple[int, str]:
     """Ask the model how long this destination deserves. Cached and shared.
@@ -116,7 +104,7 @@ def _recommend_nights(destination: str, preferences: list[str]) -> tuple[int, st
                 "scope",
                 TripScope,
                 [
-                    {"role": "system", "content": SYSTEM.format(today=date.today().isoformat())},
+                    {"role": "system", "content": prompts.get("scope").text},
                     {
                         "role": "user",
                         "content": (
