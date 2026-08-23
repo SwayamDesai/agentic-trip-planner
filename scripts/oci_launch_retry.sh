@@ -23,12 +23,18 @@ set -uo pipefail
 # retry rather than a configuration error. It costs nothing in a loop that was
 # always going to run for hours, and the alternative is exiting on a 401 that
 # would have worked on the next attempt.
+# Everything that is worth another attempt rather than an exit. The network
+# entries matter more than they look: a laptop that sleeps, or a wifi drop,
+# surfaces as "The connection to endpoint timed out", and treating that as a
+# configuration error ends an overnight run in the first hour.
+TRANSIENT='NotAuthenticated|TooManyRequests|InternalError|RequestException|ConnectTimeout|ConnectionError|timed out|Max retries|502|503|504'
+
 retry() {
   local label="$1"; shift
   local tries=0
   while [[ $tries -lt 30 ]]; do
     if out=$("$@" 2>&1); then printf '%s' "$out"; return 0; fi
-    if ! printf '%s' "$out" | grep -qE 'NotAuthenticated|TooManyRequests|InternalError|502|503|504'; then
+    if ! printf '%s' "$out" | grep -qE "$TRANSIENT"; then
       echo "$label failed:" >&2
       printf '%s\n' "$out" | tail -15 >&2
       return 1
@@ -126,8 +132,8 @@ while true; do
     # print it and stop rather than looping on a mistake for hours.
     if printf '%s' "$out" | grep -qiE 'out of (host )?capacity|outofcapacity'; then
       echo "no capacity"
-    elif printf '%s' "$out" | grep -qE 'NotAuthenticated|TooManyRequests|InternalError'; then
-      echo "transient auth/throttle — retrying"
+    elif printf '%s' "$out" | grep -qE "$TRANSIENT"; then
+      echo "transient (auth, throttle or network) — retrying"
     else
       echo "FAILED"
       echo
